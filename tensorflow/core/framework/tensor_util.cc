@@ -37,10 +37,10 @@ Tensor DeepCopy(const Tensor& other) {
              other_data.size());
     }
   } else if (other.dtype() == DT_STRING) {
-    tmp.flat<string>() = other.flat<string>();
+    tmp.unaligned_flat<string>() = other.unaligned_flat<string>();
   } else {
     CHECK_EQ(DT_VARIANT, other.dtype());
-    tmp.flat<Variant>() = other.flat<Variant>();
+    tmp.unaligned_flat<Variant>() = other.unaligned_flat<Variant>();
   }
   return tmp;
 }
@@ -167,6 +167,15 @@ Status Split(const Tensor& tensor, const gtl::ArraySlice<int64>& sizes,
 
   return Status::OK();
 }
+
+namespace internal {
+void SetTensorProtoShape(std::vector<size_t> shape,
+                         TensorShapeProto* shape_proto) {
+  for (auto dim : shape) {
+    shape_proto->mutable_dim()->Add()->set_size(dim);
+  }
+}
+}  // namespace internal
 
 }  // namespace tensor
 }  // namespace tensorflow

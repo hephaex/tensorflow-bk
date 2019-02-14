@@ -19,7 +19,6 @@ from __future__ import absolute_import
 from __future__ import division
 from __future__ import print_function
 
-from autograd import core as ag_core
 import six
 
 from tensorflow.core.framework import attr_value_pb2
@@ -211,6 +210,22 @@ def _MakeTensor(v, arg_name):
   raise TypeError(
       "Don't know how to convert %s to a TensorProto for argument '%s'" %
       (repr(v), arg_name))
+
+
+def _MakeFunc(v, arg_name):
+  """Ensure v is a func."""
+  if isinstance(v, attr_value_pb2.NameAttrList):
+    return v
+  fn_attr = attr_value_pb2.NameAttrList()
+  if isinstance(v, compat.bytes_or_text_types):
+    fn_attr.name = v
+  elif hasattr(v, "add_to_graph"):
+    v.add_to_graph(ops.get_default_graph())
+    fn_attr.name = v.name
+  else:
+    raise TypeError("Don't know how to convert {} to a func for "
+                    "argument {}".format(v, arg_name))
+  return fn_attr
 
 
 class _OpInfo(object):
@@ -483,7 +498,8 @@ class OpDefLibrary(object):
               else:
                 raise TypeError("%s that don't all match." % prefix)
             else:
-              raise TypeError("%s that are invalid." % prefix)
+              raise TypeError(
+                  "%s that are invalid. Tensors: %s" % (prefix, values))
 
           types = [x.dtype for x in values]
           inputs.extend(values)
@@ -503,7 +519,6 @@ class OpDefLibrary(object):
             default_dtype = default_type_attr_map[input_arg.type_attr]
 
           try:
-            values = ag_core.getval(values)
             values = ops.internal_convert_to_tensor(
                 values,
                 name=input_arg.name,
@@ -516,9 +531,9 @@ class OpDefLibrary(object):
             else:
               raise TypeError(
                   "Expected %s passed to parameter '%s' of op '%s', got %s of "
-                  "type '%s' instead." %
+                  "type '%s' instead. Error: %s" %
                   (dtypes.as_dtype(dtype).name, input_arg.name, op_type_name,
-                   repr(values), type(values).__name__))
+                   repr(values), type(values).__name__, err))
           except ValueError:
             # What type does convert_to_tensor think it has?
             try:
@@ -571,7 +586,7 @@ class OpDefLibrary(object):
                   "than minimum length %d." %
                   (input_name, op_type_name, len(values), num_attr.minimum))
           # All tensors must have the same base type.
-          if any([bt != base_types[0] for bt in base_types]):
+          if any(bt != base_types[0] for bt in base_types):
             raise TypeError(
                 "All tensors passed to '%s' of '%s' Op "
                 "must have the same type." %
@@ -734,13 +749,9 @@ class OpDefLibrary(object):
           attr_value.list.tensor.extend(
               [_MakeTensor(x, key) for x in value])
         elif attr_def.type == "func":
-          if isinstance(value, attr_value_pb2.NameAttrList):
-            attr_value.func.CopyFrom(value)
-          elif isinstance(value, compat.bytes_or_text_types):
-            attr_value.func.name = value
-          else:
-            value.add_to_graph(ops.get_default_graph())
-            attr_value.func.name = value.name
+          attr_value.func.CopyFrom(_MakeFunc(value, key))
+        elif attr_def.type == "list(func)":
+          attr_value.list.func.extend([_MakeFunc(x, key) for x in value])
         else:
           raise TypeError("Unrecognized Attr type " + attr_def.type)
 
@@ -784,7 +795,6 @@ class OpDefLibrary(object):
                               if arg.is_ref]
       with _MaybeColocateWith(must_colocate_inputs):
         # Add Op to graph
-        inputs = [ag_core.getval(x) for x in inputs]
         op = g.create_op(op_type_name, inputs, output_types, name=scope,
                          input_types=input_types, attrs=attr_protos,
                          op_def=op_def)

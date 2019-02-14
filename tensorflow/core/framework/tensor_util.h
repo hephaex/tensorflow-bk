@@ -13,12 +13,17 @@ See the License for the specific language governing permissions and
 limitations under the License.
 ==============================================================================*/
 
-#ifndef TENSORFLOW_FRAMEWORK_TENSOR_UTIL_H_
-#define TENSORFLOW_FRAMEWORK_TENSOR_UTIL_H_
+#ifndef TENSORFLOW_CORE_FRAMEWORK_TENSOR_UTIL_H_
+#define TENSORFLOW_CORE_FRAMEWORK_TENSOR_UTIL_H_
 
-#include "tensorflow/core/framework/tensor.h"
-
+#include <algorithm>
 #include <vector>
+#include "tensorflow/core/framework/tensor.h"
+#include "tensorflow/core/framework/tensor.pb.h"
+#include "tensorflow/core/framework/tensor_shape.pb.h"
+#include "tensorflow/core/platform/protobuf.h"
+#include "tensorflow/core/platform/types.h"
+
 namespace tensorflow {
 namespace tensor {
 
@@ -54,7 +59,98 @@ Status Concat(const gtl::ArraySlice<Tensor>& tensors,
 Status Split(const Tensor& tensor, const gtl::ArraySlice<int64>& sizes,
              std::vector<Tensor>* result) TF_MUST_USE_RESULT;
 
+namespace internal {
+void SetTensorProtoShape(std::vector<size_t> shape,
+                         TensorShapeProto* shape_proto);
+
+// Defines value type dependent methods to manipulate `TensorProto`.
+// Class specializations have to define following methods:
+//   static DataType GetDataType()
+//   static void AddValue(Type value, TensorProto* proto)
+//   template <typename IterType>
+//   static void AddValues(IterType begin, IterType end, TensorProto* proto)
+
+template <typename Type>
+class TensorProtoHelper : public std::false_type {};
+
+#define DEFINE_PROTO_HELPER(TYPE, TF_TYPE, FIELDTYPE)                         \
+  template <>                                                                 \
+  class TensorProtoHelper<TYPE> : public std::true_type {                     \
+   public:                                                                    \
+    static DataType GetDataType() { return DataType::TF_TYPE; }               \
+    static void AddValue(const TYPE& value, TensorProto* proto) {             \
+      proto->mutable_##FIELDTYPE##_val()->Add(value);                         \
+    }                                                                         \
+    template <typename IterType>                                              \
+    static void AddValues(IterType begin, IterType end, TensorProto* proto) { \
+      using SrcType = typename std::iterator_traits<IterType>::value_type;    \
+      size_t n = std::distance(begin, end);                                   \
+      FIELDTYPE* dst_ptr = AppendUninitialized(n, proto);                     \
+      if (std::is_same<SrcType, FIELDTYPE>::value) {                          \
+        std::copy(begin, end, dst_ptr);                                       \
+      } else {                                                                \
+        std::transform(begin, end, dst_ptr, [](SrcType x) -> FIELDTYPE {      \
+          return static_cast<FIELDTYPE>(x);                                   \
+        });                                                                   \
+      }                                                                       \
+    }                                                                         \
+                                                                              \
+   private:                                                                   \
+    static FIELDTYPE* AppendUninitialized(size_t n, TensorProto* proto) {     \
+      auto* field = proto->mutable_##FIELDTYPE##_val();                       \
+      field->Reserve(field->size() + n);                                      \
+      return reinterpret_cast<FIELDTYPE*>(field->AddNAlreadyReserved(n));     \
+    }                                                                         \
+  }
+
+DEFINE_PROTO_HELPER(float, DT_FLOAT, float);
+DEFINE_PROTO_HELPER(double, DT_DOUBLE, double);
+DEFINE_PROTO_HELPER(int8, DT_INT8, int);
+DEFINE_PROTO_HELPER(uint8, DT_UINT8, int);
+DEFINE_PROTO_HELPER(int16, DT_INT16, int);
+DEFINE_PROTO_HELPER(uint16, DT_UINT16, int);
+DEFINE_PROTO_HELPER(int32, DT_INT32, int);
+DEFINE_PROTO_HELPER(uint32, DT_UINT32, uint32);
+DEFINE_PROTO_HELPER(int64, DT_INT64, int64);
+DEFINE_PROTO_HELPER(uint64, DT_UINT64, uint64);
+DEFINE_PROTO_HELPER(bool, DT_BOOL, bool);
+
+#undef DEFINE_PROTO_HELPER
+
+template <>
+class TensorProtoHelper<string> : public std::true_type {
+ public:
+  static DataType GetDataType() { return DataType::DT_STRING; }
+  static void AddValue(const string& value, TensorProto* proto) {
+    *proto->mutable_string_val()->Add() = value;
+  }
+  template <typename IterType>
+  static void AddValues(IterType begin, IterType end, TensorProto* proto) {
+    for (IterType it = begin; it != end; ++it) {
+      AddValue(*it, proto);
+    }
+  }
+};
+
+}  // namespace internal
+
+// Creates a 'TensorProto' with specified shape and values.
+// The dtype and a field to represent data values of the returned 'TensorProto'
+// are determined based on type of the 'values' parameter.
+template <typename Type>
+typename std::enable_if<internal::TensorProtoHelper<Type>::value,
+                        TensorProto>::type
+CreateTensorProto(const std::vector<Type>& values,
+                  const std::vector<size_t>& shape) {
+  TensorProto tensor;
+  using TypeHelper = internal::TensorProtoHelper<Type>;
+  tensor.set_dtype(TypeHelper::GetDataType());
+  internal::SetTensorProtoShape(shape, tensor.mutable_tensor_shape());
+  TypeHelper::AddValues(values.begin(), values.end(), &tensor);
+  return tensor;
+}
+
 }  // namespace tensor
 }  // namespace tensorflow
 
-#endif  // TENSORFLOW_FRAMEWORK_TENSOR_UTIL_H_
+#endif  // TENSORFLOW_CORE_FRAMEWORK_TENSOR_UTIL_H_

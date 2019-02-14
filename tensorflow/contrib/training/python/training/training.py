@@ -244,8 +244,6 @@ from __future__ import absolute_import
 from __future__ import division
 from __future__ import print_function
 
-from tensorflow.contrib.framework.python.ops import variables
-from tensorflow.python.framework import constant_op
 from tensorflow.python.framework import ops
 from tensorflow.python.ops import array_ops
 from tensorflow.python.ops import clip_ops
@@ -255,6 +253,7 @@ from tensorflow.python.platform import tf_logging as logging
 from tensorflow.python.summary import summary
 from tensorflow.python.training import monitored_session
 from tensorflow.python.training import optimizer as tf_optimizer
+from tensorflow.python.training import training_util
 
 # TODO(nsilberman): move add_gradients_summaries, clip_gradient_norms and
 # multiply_gradients into contrib/summaries and contrib/optimizers.py
@@ -354,11 +353,11 @@ def multiply_gradients(grads_and_vars, gradient_multipliers):
         raise ValueError('Requested multiple of `None` gradient.')
 
       if isinstance(grad, ops.IndexedSlices):
-        tmp = grad.values * constant_op.constant(
+        tmp = grad.values * ops.convert_to_tensor(
             gradient_multipliers[key], dtype=grad.dtype)
         grad = ops.IndexedSlices(tmp, grad.indices, grad.dense_shape)
       else:
-        grad *= constant_op.constant(
+        grad *= ops.convert_to_tensor(
             gradient_multipliers[key], dtype=grad.dtype)
     multiplied_grads_and_vars.append((grad, var))
   return multiplied_grads_and_vars
@@ -409,7 +408,7 @@ def create_train_op(total_loss,
       loss value.
   """
   if global_step is _USE_GLOBAL_STEP:
-    global_step = variables.get_or_create_global_step()
+    global_step = training_util.get_or_create_global_step()
 
   # Update ops use GraphKeys.UPDATE_OPS collection if update_ops is None.
   global_update_ops = set(ops.get_collection(ops.GraphKeys.UPDATE_OPS))
@@ -419,7 +418,7 @@ def create_train_op(total_loss,
     update_ops = set(update_ops)
   if not global_update_ops.issubset(update_ops):
     logging.warning('update_ops in create_train_op does not contain all the '
-                    ' update_ops in GraphKeys.UPDATE_OPS')
+                    'update_ops in GraphKeys.UPDATE_OPS')
 
   # Make sure update_ops are computed before total_loss.
   if update_ops:
@@ -433,7 +432,7 @@ def create_train_op(total_loss,
   else:
     # Make sure that variables_to_train are in tf.trainable_variables()
     for v in variables_to_train:
-      assert v in tf_variables.trainable_variables()
+      assert v.trainable or v in tf_variables.trainable_variables()
 
   assert variables_to_train
 
@@ -483,7 +482,9 @@ def train(train_op,
           chief_only_hooks=None,
           save_checkpoint_secs=600,
           save_summaries_steps=100,
-          config=None):
+          config=None,
+          max_wait_secs=7200,
+          run_metadata=None):
   """Runs the training loop.
 
   Args:
@@ -506,6 +507,11 @@ def train(train_op,
       `save_summaries_steps` is set to `None`, then the default summary saver
       isn't used.
     config: An instance of `tf.ConfigProto`.
+    max_wait_secs: Maximum time workers should wait for the session to
+      become available. This should be kept relatively short to help detect
+      incorrect code, but sometimes may need to be increased if the chief takes
+      a while to start up.
+    run_metadata: A [`RunMetadata`] protocol buffer.
 
   Returns:
     the value of the loss function after training.
@@ -532,8 +538,9 @@ def train(train_op,
       chief_only_hooks=chief_only_hooks,
       save_checkpoint_secs=save_checkpoint_secs,
       save_summaries_steps=save_summaries_steps,
-      config=config) as session:
+      config=config,
+      max_wait_secs=max_wait_secs) as session:
     loss = None
     while not session.should_stop():
-      loss = session.run(train_op)
+      loss = session.run(train_op, run_metadata=run_metadata)
   return loss

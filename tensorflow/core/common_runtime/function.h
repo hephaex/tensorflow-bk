@@ -13,14 +13,15 @@ See the License for the specific language governing permissions and
 limitations under the License.
 ==============================================================================*/
 
-#ifndef TENSORFLOW_COMMON_RUNTIME_FUNCTION_H_
-#define TENSORFLOW_COMMON_RUNTIME_FUNCTION_H_
+#ifndef TENSORFLOW_CORE_COMMON_RUNTIME_FUNCTION_H_
+#define TENSORFLOW_CORE_COMMON_RUNTIME_FUNCTION_H_
 
 #include <functional>
 #include <memory>
 
 #include "tensorflow/core/common_runtime/device.h"
 #include "tensorflow/core/common_runtime/device_mgr.h"
+#include "tensorflow/core/common_runtime/graph_optimizer.h"
 #include "tensorflow/core/common_runtime/process_function_library_runtime.h"
 #include "tensorflow/core/framework/function.h"
 #include "tensorflow/core/graph/graph.h"
@@ -55,7 +56,7 @@ void RegisterDefaultCustomKernelCreator(CustomKernelCreator cb);
 std::unique_ptr<FunctionLibraryRuntime> NewFunctionLibraryRuntime(
     const DeviceMgr* device_mgr, Env* env, Device* device,
     int graph_def_version, const FunctionLibraryDefinition* lib_def,
-    const OptimizerOptions& optimizer_options,
+    thread::ThreadPool* thread_pool, const OptimizerOptions& optimizer_options,
     CustomKernelCreator custom_kernel_creator,
     ProcessFunctionLibraryRuntime* parent);
 
@@ -65,7 +66,7 @@ std::unique_ptr<FunctionLibraryRuntime> NewFunctionLibraryRuntime(
 std::unique_ptr<FunctionLibraryRuntime> NewFunctionLibraryRuntime(
     const DeviceMgr* device_mgr, Env* env, Device* device,
     int graph_def_version, const FunctionLibraryDefinition* lib_def,
-    const OptimizerOptions& optimizer_options,
+    thread::ThreadPool* thread_pool, const OptimizerOptions& optimizer_options,
     ProcessFunctionLibraryRuntime* parent);
 
 // FunctionLibraryRuntime::GetFunctionBody returns a description of an
@@ -133,6 +134,8 @@ void DumpGraph(StringPiece label, const Graph* g);
 // OptimizeGraph mutates **g extensively and replaces '*g' with a
 // complete copy. Therefore, the caller should not keep any references
 // to nodes *g.
+void OptimizeGraph(FunctionLibraryRuntime* lib, std::unique_ptr<Graph>* g,
+                   const GraphOptimizer::Options& graph_optimizer_options);
 void OptimizeGraph(FunctionLibraryRuntime* lib, std::unique_ptr<Graph>* g);
 
 // Convert the Graph of a function to a GraphDef.
@@ -155,9 +158,13 @@ FunctionBody* SymbolicGradient(const FunctionBody& f);
 
 // Given a "caller" in graph "g", which is a function call of a function
 // to "fbody". Replaces the "caller" with fbody->graph and connects
-// edges properly.
+// edges properly. "override_device" specifies whether inlining should replace
+// explicitly specified devices inside fbody with the callee's device.
+//
+// TODO(ezhulenev): Return Status::error if function inlining failed.
 void InlineFunctionBody(const FunctionLibraryDefinition& flib_def, Graph* g,
-                        Node* caller, const FunctionBody* fbody);
+                        Node* caller, const FunctionBody* fbody,
+                        bool override_device = true);
 
 // Instantiates FunctionDef into a graph. Set *fbody to point to the
 // FunctionBody that holds the instantiated FunctionDef.
@@ -168,4 +175,4 @@ Status FunctionDefToBodyHelper(
     FunctionBody** fbody);
 }  // end namespace tensorflow
 
-#endif  // TENSORFLOW_COMMON_RUNTIME_FUNCTION_H_
+#endif  // TENSORFLOW_CORE_COMMON_RUNTIME_FUNCTION_H_

@@ -18,6 +18,9 @@ limitations under the License.
 #include <vector>
 #include "tensorflow/core/framework/tensor.h"
 #include "tensorflow/core/framework/types.h"
+#include "tensorflow/core/framework/variant.h"
+#include "tensorflow/core/framework/variant_encode_decode.h"
+#include "tensorflow/core/framework/variant_tensor_data.h"
 #include "tensorflow/core/lib/core/status_test_util.h"
 #include "tensorflow/core/platform/test.h"
 
@@ -145,6 +148,68 @@ TEST(TensorUtil, DeepCopySlice) {
   }
 }
 
+TEST(TensorUtil, DeepCopySliceString) {
+  Tensor x(DT_STRING, TensorShape({10}));
+  x.flat<string>().setConstant("hello");
+
+  // Slice 'x' -- y still refers to the same buffer.
+  Tensor y = x.Slice(3, 7);
+
+  // Do a deep copy of y, which is a slice.
+  Tensor z = tensor::DeepCopy(y);
+
+  // Set x to be different.
+  x.flat<string>().setConstant("goodbye");
+
+  EXPECT_EQ(TensorShape({10}), x.shape());
+  EXPECT_EQ(TensorShape({4}), y.shape());
+  EXPECT_EQ(TensorShape({4}), z.shape());
+  EXPECT_EQ(DT_STRING, x.dtype());
+  EXPECT_EQ(DT_STRING, y.dtype());
+  EXPECT_EQ(DT_STRING, z.dtype());
+
+  // x and y should now all be 'goodbye', but z should be 'hello'.
+  for (int i = 0; i < 10; ++i) {
+    EXPECT_EQ("goodbye", x.flat<string>()(i));
+  }
+  for (int i = 0; i < 4; ++i) {
+    EXPECT_EQ("goodbye", y.unaligned_flat<string>()(i));
+    EXPECT_EQ("hello", z.flat<string>()(i));
+  }
+}
+
+TEST(TensorUtil, DeepCopySliceVariant) {
+  Tensor x(DT_VARIANT, TensorShape({10}));
+  x.flat<Variant>().setConstant(Tensor(42.0f));
+
+  // Slice 'x' -- y still refers to the same buffer.
+  Tensor y = x.Slice(3, 7);
+
+  // Do a deep copy of y, which is a slice.
+  Tensor z = tensor::DeepCopy(y);
+
+  // Set x to be different.
+  x.flat<Variant>().setConstant(Tensor("foo"));
+
+  EXPECT_EQ(TensorShape({10}), x.shape());
+  EXPECT_EQ(TensorShape({4}), y.shape());
+  EXPECT_EQ(TensorShape({4}), z.shape());
+  EXPECT_EQ(DT_VARIANT, x.dtype());
+  EXPECT_EQ(DT_VARIANT, y.dtype());
+  EXPECT_EQ(DT_VARIANT, z.dtype());
+
+  // Each element of x and y should now be a DT_STRING Tensor containing "foo",
+  // but each element of z should be a DT_FLOAT tensor containing 42.0.
+  for (int i = 0; i < 10; ++i) {
+    EXPECT_EQ("foo", x.flat<Variant>()(i).get<Tensor>()->scalar<string>()());
+  }
+  for (int i = 0; i < 4; ++i) {
+    EXPECT_EQ("foo",
+              y.unaligned_flat<Variant>()(i).get<Tensor>()->scalar<string>()());
+    EXPECT_EQ(42.0, z.flat<Variant>()(i).get<Tensor>()->scalar<float>()());
+  }
+}
+
 TEST(TensorUtil, Concat) {
   std::vector<int64> sizes = {1, 4, 5};
   std::vector<Tensor> to_concat;
@@ -224,6 +289,146 @@ TEST(TensorUtil, ConcatSplitStrings) {
   for (int i = 0; i < 4 * 3; ++i) {
     EXPECT_NE(x.flat<string>()(i), x_round_tripped.flat<string>()(i));
   }
+}
+
+TEST(TensorProtoUtil, CreatesStringTensorProto) {
+  std::vector<string> values{"a", "b", "c"};
+  std::vector<size_t> shape{1, 3};
+
+  auto proto = tensor::CreateTensorProto(values, shape);
+
+  EXPECT_EQ(proto.DebugString(),
+            "dtype: DT_STRING\n"
+            "tensor_shape {\n"
+            "  dim {\n"
+            "    size: 1\n"
+            "  }\n"
+            "  dim {\n"
+            "    size: 3\n"
+            "  }\n"
+            "}\n"
+            "string_val: \"a\"\n"
+            "string_val: \"b\"\n"
+            "string_val: \"c\"\n");
+}
+
+TEST(TensorProtoUtil, CreatesInt32TensorProto) {
+  std::vector<int32> values{1, 2};
+  std::vector<size_t> shape{2};
+
+  auto proto = tensor::CreateTensorProto(values, shape);
+
+  EXPECT_EQ(proto.DebugString(),
+            "dtype: DT_INT32\n"
+            "tensor_shape {\n"
+            "  dim {\n"
+            "    size: 2\n"
+            "  }\n"
+            "}\n"
+            "int_val: 1\n"
+            "int_val: 2\n");
+}
+
+TEST(TensorProtoUtil, CreatesInt64TensorProto) {
+  std::vector<int64> values{1, 2};
+  std::vector<size_t> shape{2};
+
+  auto proto = tensor::CreateTensorProto(values, shape);
+
+  EXPECT_EQ(proto.DebugString(),
+            "dtype: DT_INT64\n"
+            "tensor_shape {\n"
+            "  dim {\n"
+            "    size: 2\n"
+            "  }\n"
+            "}\n"
+            "int64_val: 1\n"
+            "int64_val: 2\n");
+}
+
+TEST(TensorProtoUtil, CreatesUInt32TensorProto) {
+  std::vector<uint32> values{1, 2};
+  std::vector<size_t> shape{2};
+
+  auto proto = tensor::CreateTensorProto(values, shape);
+
+  EXPECT_EQ(proto.DebugString(),
+            "dtype: DT_UINT32\n"
+            "tensor_shape {\n"
+            "  dim {\n"
+            "    size: 2\n"
+            "  }\n"
+            "}\n"
+            "uint32_val: 1\n"
+            "uint32_val: 2\n");
+}
+
+TEST(TensorProtoUtil, CreatesUInt64TensorProto) {
+  std::vector<uint64> values{1, 2};
+  std::vector<size_t> shape{2};
+
+  auto proto = tensor::CreateTensorProto(values, shape);
+
+  EXPECT_EQ(proto.DebugString(),
+            "dtype: DT_UINT64\n"
+            "tensor_shape {\n"
+            "  dim {\n"
+            "    size: 2\n"
+            "  }\n"
+            "}\n"
+            "uint64_val: 1\n"
+            "uint64_val: 2\n");
+}
+
+TEST(TensorProtoUtil, CreatesFloatTensorProto) {
+  std::vector<float> values{1.1, 2.2};
+  std::vector<size_t> shape{2};
+
+  auto proto = tensor::CreateTensorProto(values, shape);
+
+  EXPECT_EQ(proto.DebugString(),
+            "dtype: DT_FLOAT\n"
+            "tensor_shape {\n"
+            "  dim {\n"
+            "    size: 2\n"
+            "  }\n"
+            "}\n"
+            "float_val: 1.1\n"
+            "float_val: 2.2\n");
+}
+
+TEST(TensorProtoUtil, CreatesDoubleTensorProto) {
+  std::vector<double> values{1.1, 2.2};
+  std::vector<size_t> shape{2};
+
+  auto proto = tensor::CreateTensorProto(values, shape);
+
+  EXPECT_EQ(proto.DebugString(),
+            "dtype: DT_DOUBLE\n"
+            "tensor_shape {\n"
+            "  dim {\n"
+            "    size: 2\n"
+            "  }\n"
+            "}\n"
+            "double_val: 1.1\n"
+            "double_val: 2.2\n");
+}
+
+TEST(TensorProtoUtil, CreatesBoolTensorProto) {
+  std::vector<bool> values{true, false};
+  std::vector<size_t> shape{2};
+
+  auto proto = tensor::CreateTensorProto(values, shape);
+
+  EXPECT_EQ(proto.DebugString(),
+            "dtype: DT_BOOL\n"
+            "tensor_shape {\n"
+            "  dim {\n"
+            "    size: 2\n"
+            "  }\n"
+            "}\n"
+            "bool_val: true\n"
+            "bool_val: false\n");
 }
 
 }  // namespace

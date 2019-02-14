@@ -53,10 +53,15 @@ cuda_py_test(
         "//tensorflow/python:client",
         "//tensorflow/python:client_testlib",
         "//tensorflow/python:framework_for_generated_wrappers",
+        "//tensorflow/python:distributed_framework_test_lib",
         "//tensorflow/python:platform",
         "//tensorflow/python:variables",
     ],
-    tags = ["no_pip"],
+    tags = [
+        "no_pip",
+        "oss_serial",
+    ],
+    xla_enable_strict_auto_jit = False,  # Node names are different with autojit
 )
 
 cuda_py_test(
@@ -72,6 +77,7 @@ cuda_py_test(
         "//tensorflow/python:variables",
     ],
     tags = ["no_pip"],
+    xla_enable_strict_auto_jit = False,  # Node names are different with autojit
 )
 
 py_library(
@@ -126,6 +132,7 @@ cuda_py_test(
         "//tensorflow/python:variables",
     ],
     tags = ["no_pip"],
+    xla_enable_strict_auto_jit = False,  # Node names are different with autojit
 )
 
 py_library(
@@ -151,19 +158,4 @@ py_test(
         "//tensorflow/python:math_ops",
         "@com_google_pprof//:pprof_proto_py",
     ],
-)
-
-# -----------------------------------------------------------------------------
-# Google-internal targets.  These must be at the end for syncrepo.
-
-filegroup(
-    name = "all_files",
-    srcs = glob(
-        ["**/*"],
-        exclude = [
-            "**/METADATA",
-            "**/OWNERS",
-        ],
-    ),
-    visibility = ["//tensorflow:__subpackages__"],
 )
