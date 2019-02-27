@@ -95,8 +95,9 @@ class MapTest(test_base.DatasetTestBase, parameterized.TestCase):
 
     dataset = dataset_ops.Dataset.from_tensor_slices(components).map(
         _map_fn).repeat(count)
-    self.assertEqual([c.shape[1:] for c in components],
-                     [shape for shape in dataset.output_shapes])
+    self.assertEqual(
+        [c.shape[1:] for c in components],
+        [shape for shape in dataset_ops.get_legacy_output_shapes(dataset)])
     return dataset
 
   def testMapDataset(self):
@@ -161,8 +162,9 @@ class MapTest(test_base.DatasetTestBase, parameterized.TestCase):
         _map_fn, num_parallel_calls=num_parallel_calls).prefetch(
             output_buffer_size).repeat(count)
 
-    self.assertEqual([c.shape[1:] for c in components],
-                     [shape for shape in dataset.output_shapes])
+    self.assertEqual(
+        [c.shape[1:] for c in components],
+        [shape for shape in dataset_ops.get_legacy_output_shapes(dataset)])
     return dataset
 
   def testParallelMapDataset(self):
@@ -454,7 +456,8 @@ class MapTest(test_base.DatasetTestBase, parameterized.TestCase):
       dataset = dataset_ops.Dataset.from_tensors(0).repeat(10).map(func)
       expected_error = (
           errors.InvalidArgumentError,
-          "Could not colocate node with its resource and reference inputs")
+          "Cannot place the graph because a reference or resource edge "
+          "connects colocation groups with incompatible assigned devices")
       self.assertDatasetProduces(
           dataset, expected_error=expected_error, requires_initialization=True)
 

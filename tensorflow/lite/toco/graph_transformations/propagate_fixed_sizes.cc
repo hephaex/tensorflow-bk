@@ -1517,7 +1517,7 @@ void ProcessPadV2Operator(Model* model, PadV2Operator* op) {
   output_array.copy_shape(output_shape);
 }
 
-void ProcessRankOperator(Model* model, RankOperator* op) {
+void ProcessRankOperator(Model* model, TensorFlowRankOperator* op) {
   CHECK_GE(op->inputs.size(), 1);
   CHECK_EQ(op->outputs.size(), 1);
   auto& output_array = model->GetArray(op->outputs[0]);
@@ -2065,6 +2065,7 @@ void ProcessUniqueOperator(Model* model, UniqueOperator* op) {
     case OperatorType::kBatchNormalization:
     case OperatorType::kL2Normalization:
     case OperatorType::kDequantize:
+    case OperatorType::kElu:
     case OperatorType::kRelu:
     case OperatorType::kRelu1:
     case OperatorType::kRelu6:
@@ -2095,6 +2096,7 @@ void ProcessUniqueOperator(Model* model, UniqueOperator* op) {
     case OperatorType::kLogicalOr:
     case OperatorType::kZerosLike:
     case OperatorType::kReverseV2:
+    case OperatorType::kReverseSequence:
       ProcessSimpleOperator(model, op, 0);
       break;
     case OperatorType::kGather:
@@ -2219,7 +2221,7 @@ void ProcessUniqueOperator(Model* model, UniqueOperator* op) {
       ProcessRangeOperator(model, static_cast<RangeOperator*>(op));
       break;
     case OperatorType::kRank:
-      ProcessRankOperator(model, static_cast<RankOperator*>(op));
+      ProcessRankOperator(model, static_cast<TensorFlowRankOperator*>(op));
       break;
     case OperatorType::kShape:
       ProcessShapeOperator(model, static_cast<TensorFlowShapeOperator*>(op));
@@ -2340,6 +2342,11 @@ void ProcessUniqueOperator(Model* model, UniqueOperator* op) {
       break;
     case OperatorType::kUnique:
       ProcessUniqueOperator(model, static_cast<UniqueOperator*>(op));
+      break;
+    case OperatorType::kWhere:
+      // The size of the output can only be known after evaluating the cond
+      // tensor. Ignore shape propagation here and defer that to the
+      // interpreter.
       break;
     default:
       // Unimplemented, another graph transformation should drop it.

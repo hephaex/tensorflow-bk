@@ -7527,6 +7527,49 @@ func MatrixBandPart(scope *Scope, input tf.Output, num_lower tf.Output, num_uppe
 	return op.Output(0)
 }
 
+// Gets the next output from the given iterator as an Optional variant.
+func IteratorGetNextAsOptional(scope *Scope, iterator tf.Output, output_types []tf.DataType, output_shapes []tf.Shape) (optional tf.Output) {
+	if scope.Err() != nil {
+		return
+	}
+	attrs := map[string]interface{}{"output_types": output_types, "output_shapes": output_shapes}
+	opspec := tf.OpSpec{
+		Type: "IteratorGetNextAsOptional",
+		Input: []tf.Input{
+			iterator,
+		},
+		Attrs: attrs,
+	}
+	op := scope.AddOperation(opspec)
+	return op.Output(0)
+}
+
+// Returns the value stored in an Optional variant or raises an error if none exists.
+func OptionalGetValue(scope *Scope, optional tf.Output, output_types []tf.DataType, output_shapes []tf.Shape) (components []tf.Output) {
+	if scope.Err() != nil {
+		return
+	}
+	attrs := map[string]interface{}{"output_types": output_types, "output_shapes": output_shapes}
+	opspec := tf.OpSpec{
+		Type: "OptionalGetValue",
+		Input: []tf.Input{
+			optional,
+		},
+		Attrs: attrs,
+	}
+	op := scope.AddOperation(opspec)
+	if scope.Err() != nil {
+		return
+	}
+	var idx int
+	var err error
+	if components, idx, err = makeOutputList(op, idx, "components"); err != nil {
+		scope.UpdateErr("OptionalGetValue", err)
+		return
+	}
+	return components
+}
+
 // Outputs a tensor containing the reduction across all input tensors.
 //
 // Outputs a tensor containing the reduction across all input tensors passed to ops
@@ -11016,6 +11059,58 @@ func MaxPoolWithArgmax(scope *Scope, input tf.Output, ksize []int64, strides []i
 	return op.Output(0), op.Output(1)
 }
 
+// Identity transformation that models performance.
+//
+// Identity transformation that models performance.
+//
+// Arguments:
+//	input_dataset: A variant tensor representing the input dataset.
+//
+//
+func ModelDataset(scope *Scope, input_dataset tf.Output, output_types []tf.DataType, output_shapes []tf.Shape) (handle tf.Output) {
+	if scope.Err() != nil {
+		return
+	}
+	attrs := map[string]interface{}{"output_types": output_types, "output_shapes": output_shapes}
+	opspec := tf.OpSpec{
+		Type: "ModelDataset",
+		Input: []tf.Input{
+			input_dataset,
+		},
+		Attrs: attrs,
+	}
+	op := scope.AddOperation(opspec)
+	return op.Output(0)
+}
+
+// Fast Fourier transform.
+//
+// Computes the 1-dimensional discrete Fourier transform over the inner-most
+// dimension of `input`.
+//
+// Arguments:
+//	input: A complex tensor.
+//
+// Returns A complex tensor of the same shape as `input`. The inner-most
+//   dimension of `input` is replaced with its 1D Fourier transform.
+//
+// @compatibility(numpy)
+// Equivalent to np.fft.fft
+// @end_compatibility
+func FFT(scope *Scope, input tf.Output) (output tf.Output) {
+	if scope.Err() != nil {
+		return
+	}
+	opspec := tf.OpSpec{
+		Type: "FFT",
+		Input: []tf.Input{
+			input,
+		},
+	}
+	op := scope.AddOperation(opspec)
+	return op.Output(0)
+}
+
 // MaxPoolAttr is an optional argument to MaxPool.
 type MaxPoolAttr func(optionalAttr)
 
@@ -13407,6 +13502,14 @@ func ResizeBicubicAlignCorners(value bool) ResizeBicubicAttr {
 	}
 }
 
+// ResizeBicubicHalfPixelCenters sets the optional half_pixel_centers attribute to value.
+// If not specified, defaults to false
+func ResizeBicubicHalfPixelCenters(value bool) ResizeBicubicAttr {
+	return func(m optionalAttr) {
+		m["half_pixel_centers"] = value
+	}
+}
+
 // Resize `images` to `size` using bicubic interpolation.
 //
 // Input images can be of different types but output images are always float.
@@ -14829,6 +14932,51 @@ func ReciprocalGrad(scope *Scope, y tf.Output, dy tf.Output) (z tf.Output) {
 		Input: []tf.Input{
 			y, dy,
 		},
+	}
+	op := scope.AddOperation(opspec)
+	return op.Output(0)
+}
+
+// EuclideanNormAttr is an optional argument to EuclideanNorm.
+type EuclideanNormAttr func(optionalAttr)
+
+// EuclideanNormKeepDims sets the optional keep_dims attribute to value.
+//
+// value: If true, retain reduced dimensions with length 1.
+// If not specified, defaults to false
+func EuclideanNormKeepDims(value bool) EuclideanNormAttr {
+	return func(m optionalAttr) {
+		m["keep_dims"] = value
+	}
+}
+
+// Computes the euclidean norm of elements across dimensions of a tensor.
+//
+// Reduces `input` along the dimensions given in `axis`. Unless
+// `keep_dims` is true, the rank of the tensor is reduced by 1 for each entry in
+// `axis`. If `keep_dims` is true, the reduced dimensions are
+// retained with length 1.
+//
+// Arguments:
+//	input: The tensor to reduce.
+//	axis: The dimensions to reduce. Must be in the range
+// `[-rank(input), rank(input))`.
+//
+// Returns The reduced tensor.
+func EuclideanNorm(scope *Scope, input tf.Output, axis tf.Output, optional ...EuclideanNormAttr) (output tf.Output) {
+	if scope.Err() != nil {
+		return
+	}
+	attrs := map[string]interface{}{}
+	for _, a := range optional {
+		a(attrs)
+	}
+	opspec := tf.OpSpec{
+		Type: "EuclideanNorm",
+		Input: []tf.Input{
+			input, axis,
+		},
+		Attrs: attrs,
 	}
 	op := scope.AddOperation(opspec)
 	return op.Output(0)
@@ -19177,6 +19325,14 @@ func TPUReplicateMetadataPaddingMap(value []string) TPUReplicateMetadataAttr {
 	}
 }
 
+// TPUReplicateMetadataStepMarkerLocation sets the optional step_marker_location attribute to value.
+// If not specified, defaults to "STEP_MARK_AT_ENTRY"
+func TPUReplicateMetadataStepMarkerLocation(value string) TPUReplicateMetadataAttr {
+	return func(m optionalAttr) {
+		m["step_marker_location"] = value
+	}
+}
+
 // Metadata indicaitng how the TPU computation should be replicated.
 //
 // Arguments:
@@ -20647,6 +20803,14 @@ type QuantizedResizeBilinearAttr func(optionalAttr)
 func QuantizedResizeBilinearAlignCorners(value bool) QuantizedResizeBilinearAttr {
 	return func(m optionalAttr) {
 		m["align_corners"] = value
+	}
+}
+
+// QuantizedResizeBilinearHalfPixelCenters sets the optional half_pixel_centers attribute to value.
+// If not specified, defaults to false
+func QuantizedResizeBilinearHalfPixelCenters(value bool) QuantizedResizeBilinearAttr {
+	return func(m optionalAttr) {
+		m["half_pixel_centers"] = value
 	}
 }
 
@@ -30181,6 +30345,24 @@ func Save(scope *Scope, filename tf.Output, tensor_names tf.Output, data []tf.Ou
 	return scope.AddOperation(opspec)
 }
 
+// Returns x * y element-wise. Returns zero if y is zero, even if x if infinite or NaN.
+//
+// *NOTE*: `Mul` supports broadcasting. More about broadcasting
+// [here](http://docs.scipy.org/doc/numpy/user/basics.broadcasting.html)
+func MulNoNan(scope *Scope, x tf.Output, y tf.Output) (z tf.Output) {
+	if scope.Err() != nil {
+		return
+	}
+	opspec := tf.OpSpec{
+		Type: "MulNoNan",
+		Input: []tf.Input{
+			x, y,
+		},
+	}
+	op := scope.AddOperation(opspec)
+	return op.Output(0)
+}
+
 // Returns x / y element-wise for integer types.
 //
 // Truncation designates that negative numbers will round fractional quantities
@@ -31338,6 +31520,14 @@ func ResizeBilinearAlignCorners(value bool) ResizeBilinearAttr {
 	}
 }
 
+// ResizeBilinearHalfPixelCenters sets the optional half_pixel_centers attribute to value.
+// If not specified, defaults to false
+func ResizeBilinearHalfPixelCenters(value bool) ResizeBilinearAttr {
+	return func(m optionalAttr) {
+		m["half_pixel_centers"] = value
+	}
+}
+
 // Resize `images` to `size` using bilinear interpolation.
 //
 // Input images can be of different types but output images are always float.
@@ -31469,13 +31659,14 @@ func ArgMin(scope *Scope, input tf.Output, dimension tf.Output, optional ...ArgM
 	return op.Output(0)
 }
 
-// Convert the quantized 'input' tensor into a lower-precision 'output', using the
+// Converts the quantized `input` tensor into a lower-precision `output`.
 //
-// output range specified with 'requested_output_min' and 'requested_output_max'.
+// Converts the quantized `input` tensor into a lower-precision `output`, using the
+// output range specified with `requested_output_min` and `requested_output_max`.
 //
-// [input_min, input_max] are scalar floats that specify the range for the float
-// interpretation of the 'input' data. For example, if input_min is -1.0f and
-// input_max is 1.0f, and we are dealing with quint16 quantized data, then a 0
+// `[input_min, input_max]` are scalar floats that specify the range for the float
+// interpretation of the `input` data. For example, if `input_min` is -1.0f and
+// `input_max` is 1.0f, and we are dealing with `quint16` quantized data, then a 0
 // value in the 16-bit data should be interpreted as -1.0f, and a 65535 means 1.0f.
 //
 // Arguments:
@@ -33002,11 +33193,35 @@ func QuantizedAdd(scope *Scope, x tf.Output, y tf.Output, min_x tf.Output, max_x
 	return op.Output(0), op.Output(1), op.Output(2)
 }
 
-// Given a quantized tensor described by (input, input_min, input_max), outputs a
+// Scatters tensor at indices in an input list.
 //
-// range that covers the actual values present in that tensor.  This op is
-// typically used to produce the requested_output_min and requested_output_max for
-// Requantize.
+// Each member of the TensorList corresponds to one row of the input tensor,
+// specified by the given index (see `tf.gather`).
+//
+// input_handle: The list to scatter into.
+// tensor: The input tensor.
+// indices: The indices used to index into the list.
+// output_handle: The TensorList.
+func TensorListScatterIntoExistingList(scope *Scope, input_handle tf.Output, tensor tf.Output, indices tf.Output) (output_handle tf.Output) {
+	if scope.Err() != nil {
+		return
+	}
+	opspec := tf.OpSpec{
+		Type: "TensorListScatterIntoExistingList",
+		Input: []tf.Input{
+			input_handle, tensor, indices,
+		},
+	}
+	op := scope.AddOperation(opspec)
+	return op.Output(0)
+}
+
+// Computes a range that covers the actual values present in a quantized tensor.
+//
+// Given a quantized tensor described by `(input, input_min, input_max)`, outputs a
+// range that covers the actual values present in that tensor. This op is typically
+// used to produce the `requested_output_min` and `requested_output_max` for
+// `Requantize`.
 //
 // Arguments:
 //
@@ -33204,6 +33419,14 @@ type ResizeBilinearGradAttr func(optionalAttr)
 func ResizeBilinearGradAlignCorners(value bool) ResizeBilinearGradAttr {
 	return func(m optionalAttr) {
 		m["align_corners"] = value
+	}
+}
+
+// ResizeBilinearGradHalfPixelCenters sets the optional half_pixel_centers attribute to value.
+// If not specified, defaults to false
+func ResizeBilinearGradHalfPixelCenters(value bool) ResizeBilinearGradAttr {
+	return func(m optionalAttr) {
+		m["half_pixel_centers"] = value
 	}
 }
 
@@ -35926,6 +36149,14 @@ func ResizeBicubicGradAlignCorners(value bool) ResizeBicubicGradAttr {
 	}
 }
 
+// ResizeBicubicGradHalfPixelCenters sets the optional half_pixel_centers attribute to value.
+// If not specified, defaults to false
+func ResizeBicubicGradHalfPixelCenters(value bool) ResizeBicubicGradAttr {
+	return func(m optionalAttr) {
+		m["half_pixel_centers"] = value
+	}
+}
+
 // Computes the gradient of bicubic interpolation.
 //
 // Arguments:
@@ -35969,6 +36200,14 @@ func ResizeNearestNeighborAlignCorners(value bool) ResizeNearestNeighborAttr {
 	}
 }
 
+// ResizeNearestNeighborHalfPixelCenters sets the optional half_pixel_centers attribute to value.
+// If not specified, defaults to false
+func ResizeNearestNeighborHalfPixelCenters(value bool) ResizeNearestNeighborAttr {
+	return func(m optionalAttr) {
+		m["half_pixel_centers"] = value
+	}
+}
+
 // Resize `images` to `size` using nearest neighbor interpolation.
 //
 // Arguments:
@@ -36008,6 +36247,14 @@ type ResizeNearestNeighborGradAttr func(optionalAttr)
 func ResizeNearestNeighborGradAlignCorners(value bool) ResizeNearestNeighborGradAttr {
 	return func(m optionalAttr) {
 		m["align_corners"] = value
+	}
+}
+
+// ResizeNearestNeighborGradHalfPixelCenters sets the optional half_pixel_centers attribute to value.
+// If not specified, defaults to false
+func ResizeNearestNeighborGradHalfPixelCenters(value bool) ResizeNearestNeighborGradAttr {
+	return func(m optionalAttr) {
+		m["half_pixel_centers"] = value
 	}
 }
 
@@ -38573,101 +38820,6 @@ func OptionalHasValue(scope *Scope, optional tf.Output) (has_value tf.Output) {
 		Input: []tf.Input{
 			optional,
 		},
-	}
-	op := scope.AddOperation(opspec)
-	return op.Output(0)
-}
-
-// Returns the value stored in an Optional variant or raises an error if none exists.
-func OptionalGetValue(scope *Scope, optional tf.Output, output_types []tf.DataType, output_shapes []tf.Shape) (components []tf.Output) {
-	if scope.Err() != nil {
-		return
-	}
-	attrs := map[string]interface{}{"output_types": output_types, "output_shapes": output_shapes}
-	opspec := tf.OpSpec{
-		Type: "OptionalGetValue",
-		Input: []tf.Input{
-			optional,
-		},
-		Attrs: attrs,
-	}
-	op := scope.AddOperation(opspec)
-	if scope.Err() != nil {
-		return
-	}
-	var idx int
-	var err error
-	if components, idx, err = makeOutputList(op, idx, "components"); err != nil {
-		scope.UpdateErr("OptionalGetValue", err)
-		return
-	}
-	return components
-}
-
-// Gets the next output from the given iterator as an Optional variant.
-func IteratorGetNextAsOptional(scope *Scope, iterator tf.Output, output_types []tf.DataType, output_shapes []tf.Shape) (optional tf.Output) {
-	if scope.Err() != nil {
-		return
-	}
-	attrs := map[string]interface{}{"output_types": output_types, "output_shapes": output_shapes}
-	opspec := tf.OpSpec{
-		Type: "IteratorGetNextAsOptional",
-		Input: []tf.Input{
-			iterator,
-		},
-		Attrs: attrs,
-	}
-	op := scope.AddOperation(opspec)
-	return op.Output(0)
-}
-
-// Fast Fourier transform.
-//
-// Computes the 1-dimensional discrete Fourier transform over the inner-most
-// dimension of `input`.
-//
-// Arguments:
-//	input: A complex tensor.
-//
-// Returns A complex tensor of the same shape as `input`. The inner-most
-//   dimension of `input` is replaced with its 1D Fourier transform.
-//
-// @compatibility(numpy)
-// Equivalent to np.fft.fft
-// @end_compatibility
-func FFT(scope *Scope, input tf.Output) (output tf.Output) {
-	if scope.Err() != nil {
-		return
-	}
-	opspec := tf.OpSpec{
-		Type: "FFT",
-		Input: []tf.Input{
-			input,
-		},
-	}
-	op := scope.AddOperation(opspec)
-	return op.Output(0)
-}
-
-// Identity transformation that models performance.
-//
-// Identity transformation that models performance.
-//
-// Arguments:
-//	input_dataset: A variant tensor representing the input dataset.
-//
-//
-func ModelDataset(scope *Scope, input_dataset tf.Output, output_types []tf.DataType, output_shapes []tf.Shape) (handle tf.Output) {
-	if scope.Err() != nil {
-		return
-	}
-	attrs := map[string]interface{}{"output_types": output_types, "output_shapes": output_shapes}
-	opspec := tf.OpSpec{
-		Type: "ModelDataset",
-		Input: []tf.Input{
-			input_dataset,
-		},
-		Attrs: attrs,
 	}
 	op := scope.AddOperation(opspec)
 	return op.Output(0)

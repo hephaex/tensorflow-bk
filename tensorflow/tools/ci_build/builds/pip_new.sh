@@ -28,9 +28,10 @@
 #   TF_PYTHON_VERSION:   (python2 | python2.7 | python3.5 | python3.7)
 #
 # Optional environment variables. If provided, overwrites any default values.
-#   TF_BUILD_FLAGS:      Bazel build flags excluding `--test_tag_filters` and
-#                        test targets.
-#                          e.g. TF_BUILD_FLAGS="--verbose_failures=true \
+#   TF_BUILD_FLAGS:      Bazel build flags.
+#                          e.g. TF_BUILD_FLAGS="--config=opt"
+#   TF_TEST_FLAGS:       Bazel test flags.
+#                          e.g. TF_TEST_FLAGS="--verbose_failures=true \
 #                               --build_tests_only --test_output=errors"
 #   TF_TEST_FILTER_TAGS: Filtering tags for bazel tests. More specifically,
 #                        input tags for `--test_filter_tags` flag.
@@ -38,7 +39,7 @@
 #   TF_TEST_TARGETS:     Bazel test targets.
 #                          e.g. TF_TEST_TARGETS="//tensorflow/contrib/... \
 #                               //tensorflow/... \
-#                               //tensorflow/python/... "
+#                               //tensorflow/python/..."
 #   TF_PIP_TESTS:        PIP tests to run. If NOT specified, skips all tests.
 #                          e.g. TF_PIP_TESTS="test_pip_virtualenv_clean \
 #                               test_pip_virtualenv_clean \
@@ -134,8 +135,10 @@ update_bazel_flags() {
   fi
   # Clean up whitespaces
   BAZEL_BUILD_FLAGS=$(str_strip "${BAZEL_BUILD_FLAGS}")
+  BAZEL_TEST_FLAGS=$(str_strip "${BAZEL_TEST_FLAGS}")
   # Cleaned bazel flags
   echo "Bazel build flags (cleaned):\n" "${BAZEL_BUILD_FLAGS}"
+  echo "Bazel test flags (cleaned):\n" "${BAZEL_TEST_FLAGS}"
 }
 
 update_test_filter_tags() {
@@ -210,7 +213,8 @@ echo "PYTHON_BIN_PATH: ${PYTHON_BIN_PATH} (version: ${PYTHON_VER_CFG})"
 
 # Default values for optional global variables in case they are not user
 # defined.
-DEFAULT_BAZEL_BUILD_FLAGS='--test_output=errors --verbose_failures=true'
+DEFAULT_BAZEL_BUILD_FLAGS='--config=opt'
+DEFAULT_BAZEL_TEST_FLAGS='--test_output=errors --verbose_failures=true'
 DEFAULT_BAZEL_TEST_FILTERS='-no_oss,-oss_serial'
 DEFAULT_BAZEL_TEST_TARGETS='//tensorflow/python/... -//tensorflow/core/... -//tensorflow/compiler/... '
 DEFAULT_PIP_TESTS="" # Do not run any tests by default
@@ -220,6 +224,7 @@ DEFAULT_PIP_TEST_ROOT="pip_test"
 
 # Take in optional global variables
 BAZEL_BUILD_FLAGS=${TF_BUILD_FLAGS:-$DEFAULT_BAZEL_BUILD_FLAGS}
+BAZEL_TEST_FLAGS=${TF_TEST_FLAGS:-$DEFAULT_BAZEL_TEST_FLAGS}
 BAZEL_TEST_TARGETS=${TF_TEST_TARGETS:-$DEFAULT_BAZEL_TEST_TARGETS}
 BAZEL_TEST_FILTER_TAGS=${TF_TEST_FILTER_TAGS:-$DEFAULT_BAZEL_TEST_FILTERS}
 PIP_TESTS=${TF_PIP_TESTS:-$DEFAULT_PIP_TESTS}
@@ -240,6 +245,9 @@ if [[ -z "${PY_MAJOR_MINOR_VER}" ]]; then
 fi
 echo "Python binary path to be used in PIP install: ${PYTHON_BIN_PATH} "\
 "(Major.Minor version: ${PY_MAJOR_MINOR_VER})"
+PYTHON_BIN_PATH_INIT=${PYTHON_BIN_PATH}
+PIP_BIN_PATH="$(which pip${PYTHON_VER_CFG})"
+PIP_BIN_PATH_INIT=${PIP_BIN_PATH}
 
 # PIP packages
 INSTALL_EXTRA_PIP_PACKAGES=${TF_BUILD_INSTALL_EXTRA_PIP_PACKAGES}
@@ -300,7 +308,7 @@ test_pip_virtualenv_clean() {
   pushd "${TMP_DIR}"
 
   # Run a quick check on tensorflow installation.
-  RET_VAL=$(python -c "import tensorflow as tf; print(tf.Session().run(tf.constant(42)))")
+  RET_VAL=$(python -c "import tensorflow as tf; t1=tf.constant([1,2,3,4]); t2=tf.constant([5,6,7,8]); print(tf.add(t1,t2).shape)")
 
   # Deactivate virtualenv.
   deactivate || source deactivate || die "FAILED: Unable to deactivate from existing virtualenv."
@@ -310,7 +318,7 @@ test_pip_virtualenv_clean() {
   sudo rm -rf "${TMP_DIR}" "${CLEAN_VENV_DIR}"
 
   # Check result to see if tensorflow is properly installed.
-  if [[ ${RET_VAL} == 42 ]]; then
+  if [[ ${RET_VAL} == *'(4,)'* ]]; then
     echo "PIP test on clean virtualenv PASSED."
     return 0
   else
@@ -334,14 +342,14 @@ test_pip_virtualenv_non_clean() {
   pushd "${TMP_DIR}"
 
   # Run a quick check on tensorflow installation.
-  RET_VAL=$(python -c "import tensorflow as tf; print(tf.Session().run(tf.constant(42)))")
+  RET_VAL=$(python -c "import tensorflow as tf; t1=tf.constant([1,2,3,4]); t2=tf.constant([5,6,7,8]); print(tf.add(t1,t2).shape)")
 
   # Return to original directory. Remove temp dirs.
   popd
   sudo rm -rf "${TMP_DIR}"
 
   # Check result to see if tensorflow is properly installed.
-  if [[ ${RET_VAL} -ne 42 ]]; then
+  if ! [[ ${RET_VAL} == *'(4,)'* ]]; then
     echo "PIP test on virtualenv (non-clean) FAILED"
     return 1
   fi
@@ -425,11 +433,15 @@ create_activate_virtualenv() {
   # Use the virtualenv from the default python version (i.e., python-virtualenv)
   # to create the virtualenv directory for testing. Use the -p flag to specify
   # the python version inside the to-be-created virtualenv directory.
-  ${PYTHON_BIN_PATH} -m virtualenv -p ${PYTHON_BIN_PATH} ${VIRTUALENV_FLAGS} ${VIRTUALENV_DIR} || \
+  ${PYTHON_BIN_PATH_INIT} -m virtualenv -p ${PYTHON_BIN_PATH_INIT} ${VIRTUALENV_FLAGS} ${VIRTUALENV_DIR} || \
     die "FAILED: Unable to create virtualenv"
 
   source "${VIRTUALENV_DIR}/bin/activate" || \
     die "FAILED: Unable to activate virtualenv in ${VIRTUALENV_DIR}"
+
+  # Update .tf_configure.bazelrc with venv python path for bazel test.
+  PYTHON_BIN_PATH="$(which python)"
+  yes "" | ./configure
 }
 
 install_tensorflow_pip() {
@@ -437,18 +449,20 @@ install_tensorflow_pip() {
     die "Please provide a proper wheel file path."
   fi
 
-  TF_WHEEL_PATH="${1}"
+  # Set path to pip.
+  PIP_BIN_PATH="$(which pip${PYTHON_VER_CFG})"
+
+  # Print python and pip bin paths
+  echo "PYTHON_BIN_PATH to be used to install the .whl: ${PYTHON_BIN_PATH}"
+  echo "PIP_BIN_PATH to be used to install the .whl: ${PIP_BIN_PATH}"
 
   # Upgrade pip so it supports tags such as cp27mu, manylinux1 etc.
   echo "Upgrade pip in virtualenv"
 
   # NOTE: pip install --upgrade pip leads to a documented TLS issue for
   # some versions in python
-  curl https://bootstrap.pypa.io/get-pip.py | ${PYTHON_BIN_PATH}
-
-  # Configure matching pip version with python.
-  PIP_BIN_PATH="$(which pip${PYTHON_VER_CFG})"
-  echo "PIP_BIN_PATH: ${PIP_BIN_PATH}"
+  curl https://bootstrap.pypa.io/get-pip.py | ${PYTHON_BIN_PATH} || \
+    die "Error: pip install (get-pip.py) FAILED"
 
   # Check that requested python version matches configured one.
   check_python_pip_version
@@ -457,20 +471,22 @@ install_tensorflow_pip() {
   # WHL_PATH, which pulls in absl-py, which uses install_requires notation
   # introduced in setuptools >=20.5. The default version of setuptools is 5.5.1,
   # which is too old for absl-py.
-  ${PIP_BIN_PATH} install --upgrade setuptools==39.1.0
+  ${PIP_BIN_PATH} install --upgrade setuptools==39.1.0 || \
+    die "Error: setuptools install, upgrade FAILED"
 
   # Force tensorflow reinstallation. Otherwise it may not get installed from
   # last build if it had the same version number as previous build.
   PIP_FLAGS="--upgrade --force-reinstall"
   ${PIP_BIN_PATH} install -v ${PIP_FLAGS} ${WHL_PATH} || \
     die "pip install (forcing to reinstall tensorflow) FAILED"
-  echo "Successfully installed pip package ${TF_WHEEL_PATH}"
+  echo "Successfully installed pip package ${WHL_PATH}"
 
   # Force downgrade of setuptools. This must happen after the pip install of the
   # WHL_PATH, which ends up upgrading to the latest version of setuptools.
   # Versions of setuptools >= 39.1.0 will cause tests to fail like this:
   #   ImportError: cannot import name py31compat
-  ${PIP_BIN_PATH} install --upgrade setuptools==39.1.0
+  ${PIP_BIN_PATH} install --upgrade setuptools==39.1.0 || \
+    die "Error: setuptools install, upgrade FAILED"
 }
 
 run_test_with_bazel() {
@@ -483,10 +499,10 @@ run_test_with_bazel() {
   # PIP tests should have a "different" path. Different than the one we place
   # virtualenv, because we are deleting and recreating it here.
   PIP_TEST_PREFIX=bazel_pip
-  PIP_TEST_ROOT=$(pwd)/${PIP_TEST_PREFIX}
-  sudo rm -rf $PIP_TEST_ROOT
-  mkdir -p $PIP_TEST_ROOT
-  ln -s $(pwd)/tensorflow ${PIP_TEST_ROOT}/tensorflow
+  TEST_ROOT=$(pwd)/${PIP_TEST_PREFIX}
+  sudo rm -rf $TEST_ROOT
+  mkdir -p $TEST_ROOT
+  ln -s $(pwd)/tensorflow $TEST_ROOT/tensorflow
 
   if [[ "${IS_OSS_SERIAL}" == "1" ]]; then
     remove_test_filter_tag -no_oss
@@ -525,8 +541,11 @@ run_test_with_bazel() {
     BAZEL_PARALLEL_TEST_FLAGS="--local_test_jobs=1"
   fi
 
+  # TODO(hyey): Update test target after validation.
   # Run the test.
-  bazel test ${BAZEL_BUILD_FLAGS} ${BAZEL_PARALLEL_TEST_FLAGS} --test_tag_filters=${BAZEL_TEST_FILTER_TAGS} -- ${BAZEL_TEST_TARGETS}
+  bazel test --build_tests_only ${BAZEL_TEST_FLAGS} ${BAZEL_PARALLEL_TEST_FLAGS} --test_tag_filters=${BAZEL_TEST_FILTER_TAGS} -k -- //$PIP_TEST_PREFIX/tensorflow/python/...
+
+  unlink ${TEST_ROOT}/tensorflow
 }
 
 run_all_tests() {
@@ -631,7 +650,7 @@ echo "Size of the PIP wheel file built: $(ls -l ${WHL_PATH} | awk '{print $5}')"
 # Run tests (if any is specified).
 run_all_tests
 
-for WHL_PATH in $(ls ${PIP_TEST_ROOT}/${PROJECT_NAME}*.whl); do
+for WHL_PATH in $(ls ${PIP_WHL_DIR}/${PROJECT_NAME}*.whl); do
   if [[ "${TF_NEED_CUDA}" -eq "1" ]]; then
     # Copy and rename for gpu manylinux as we do not want auditwheel to package in libcudart.so
     WHL_PATH=${AUDITED_WHL_NAME}
@@ -646,7 +665,7 @@ for WHL_PATH in $(ls ${PIP_TEST_ROOT}/${PROJECT_NAME}*.whl); do
       WHL_PATH=${AUDITED_WHL_NAME}
       echo "Repaired manylinux1 wheel file at: ${WHL_PATH}"
     else
-      die "ERROR: Cannot find repaired wheel."
+      die "WARNING: Cannot find repaired wheel."
     fi
   fi
 done

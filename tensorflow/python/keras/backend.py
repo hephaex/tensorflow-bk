@@ -784,6 +784,14 @@ def constant(value, dtype=None, shape=None, name=None):
   """
   if dtype is None:
     dtype = floatx()
+
+  # If the outer context is eager but we are executing under the keras
+  # FuncGraph, we create EagerTensors and use them as constants.
+  if (ops.executing_eagerly_outside_functions() and
+      getattr(get_graph(), 'name', '') == 'keras_graph'):
+    with ops.init_scope():
+      return constant_op.constant(value, dtype=dtype, shape=shape, name=name)
+
   return constant_op.constant(value, dtype=dtype, shape=shape, name=name)
 
 
@@ -5310,10 +5318,15 @@ def in_multi_worker_mode():
 def configure_and_create_distributed_session(distribution_strategy):
   """Configure session config and create a session with it."""
 
-  # TODO(priyag): Throw error if a session already exists.
   def _create_session(distribution_strategy):
     """Create the Distributed Strategy session."""
     session_config = get_default_session_config()
+
+    # If a session already exists, merge in its config; in the case there is a
+    # conflict, take values of the existing config.
+    global _SESSION
+    if getattr(_SESSION, 'session', None) and _SESSION.session._config:
+      session_config.MergeFrom(_SESSION.session._config)
 
     if is_tpu_strategy(distribution_strategy):
       # TODO(priyag, yuefengz): Remove this workaround when Distribute
