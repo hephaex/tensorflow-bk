@@ -1,25 +1,26 @@
-package(default_visibility = ["//visibility:private"])
+load(
+    "//tensorflow/lite:build_def.bzl",
+    "tflite_cc_shared_object",
+    "tflite_copts",
+)
+
+package(
+    default_visibility = [":experimental"],
+    licenses = ["notice"],  # Apache 2.0
+)
 
 package_group(
     name = "experimental",
     packages = [
         "//tensorflow/lite/experimental/...",
+        "//third_party/dart/tflite_native/...",  # whitelisted
     ],
-)
-
-licenses(["notice"])  # Apache 2.0
-
-load(
-    "//tensorflow/lite:build_def.bzl",
-    "tflite_cc_shared_object",
-    "tflite_copts",
-    "tflite_jni_binary",
 )
 
 tflite_cc_shared_object(
     name = "libtensorflowlite_c.so",
     linkopts = select({
-        "//tensorflow:darwin": [
+        "//tensorflow:macos": [
             "-Wl,-exported_symbols_list,$(location //tensorflow/lite/experimental/c:exported_symbols.lds)",
             "-Wl,-install_name,@rpath/libtensorflowlite_c.so",
         ],
@@ -39,31 +40,37 @@ tflite_cc_shared_object(
 
 cc_library(
     name = "c_api_internal",
-    srcs = ["c_api.h"],
+    srcs = [
+        "c_api.h",
+        "c_api_types.h",
+    ],
     hdrs = ["c_api_internal.h"],
     copts = tflite_copts(),
     visibility = [
         "//tensorflow/lite/experimental/c:__subpackages__",
     ],
     deps = [
-        "//tensorflow/lite:context",
         "//tensorflow/lite:framework",
+        "//tensorflow/lite/c:c_api_internal",
     ],
 )
 
 cc_library(
     name = "c_api",
     srcs = ["c_api.cc"],
-    hdrs = ["c_api.h"],
+    hdrs = [
+        "c_api.h",
+        "c_api_types.h",
+    ],
     copts = tflite_copts(),
-    tags = ["swift_module=TensorFlowLiteCAPI"],
     visibility = [
         ":experimental",
     ],
     deps = [
         ":c_api_internal",
-        "//tensorflow/lite:context",
         "//tensorflow/lite:framework",
+        "//tensorflow/lite:version",
+        "//tensorflow/lite/c:c_api_internal",
         "//tensorflow/lite/kernels:builtin_ops",
     ],
 )
@@ -90,7 +97,7 @@ cc_test(
     ],
     deps = [
         ":c_api",
-        "//tensorflow/lite:context",
+        "//tensorflow/lite/c:c_api_internal",
         "//tensorflow/lite/testing:util",
         "@com_google_googletest//:gtest",
     ],

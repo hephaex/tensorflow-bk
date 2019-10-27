@@ -349,9 +349,7 @@ TEST_P(ArrayElementwiseOpTestParamCount, AddManyValues) {
                              error_spec_);
 }
 
-// TODO(b/119692968): This test runs OOM on the GPU and CPU backend.
-XLA_TEST_F(ArrayElementwiseOpTest,
-           DISABLED_ON_GPU(DISABLED_ON_CPU(DeeplyNestedAddWithSlices))) {
+XLA_TEST_F(ArrayElementwiseOpTest, DeeplyNestedAddWithSlices) {
   XlaBuilder builder(TestName());
   std::vector<float> values(30, 0.0);
   auto a_literal = LiteralUtil::CreateR1<float>(values);
@@ -1067,6 +1065,29 @@ XLA_TEST_F(ArrayElementwiseOpTest, NotZeroElementU32R1) {
   ComputeAndCompareR1<uint32>(&builder, {}, {});
 }
 
+XLA_TEST_F(ArrayElementwiseOpTest, PopcntR1) {
+  XlaBuilder builder(TestName());
+  auto a = ConstantR1<int32>(&builder, {0, 1, -15, 341});
+  PopulationCount(a);
+  ComputeAndCompareR1<int32>(&builder, {0, 1, 29, 5}, {});
+}
+
+XLA_TEST_F(ArrayElementwiseOpTest, PopcntR2) {
+  XlaBuilder builder(TestName());
+  auto a = ConstantR2<int32>(&builder, {{0, 1}, {-15, 341}});
+  PopulationCount(a);
+  Array2D<int32> expected_array({{0, 1}, {29, 5}});
+  ComputeAndCompareR2<int32>(&builder, expected_array, {});
+}
+
+XLA_TEST_F(ArrayElementwiseOpTest, PopcntS64) {
+  XlaBuilder builder(TestName());
+  auto a = ConstantR2<int64>(&builder, {{0, -1}, {INT64_MAX, INT64_MAX - 1}});
+  PopulationCount(a);
+  Array2D<int64> expected_array({{0, 64}, {63, 62}});
+  ComputeAndCompareR2<int64>(&builder, expected_array, {});
+}
+
 XLA_TEST_F(ArrayElementwiseOpTest, ShiftLeftS32) {
   XlaBuilder builder(TestName());
   auto a = ConstantR1<int32>(
@@ -1529,8 +1550,10 @@ XLA_TEST_F(ArrayElementwiseOpTest, PowOfExpF32) {
 XLA_TEST_F(ArrayElementwiseOpTest, LogOfPowerF32) {
   XlaBuilder b(TestName());
 
-  std::vector<float> values0 = {1.0f, 2.0f, 3.2f, 4.0f, 0.5f, 5.7f};
-  std::vector<float> values1 = {0.0f, 1.0f, 2.0f, 0.5f, -1.0f, -0.5f};
+  std::vector<float> values0 = {1.0f, -10.0f, -2.0f, 2.0f,
+                                3.2f, 4.0f,   0.5f,  5.7f};
+  std::vector<float> values1 = {0.0f, 10.0f, -4.0f, 1.0f,
+                                2.0f, 0.5f,  -1.0f, -0.5f};
 
   Literal literal0 = LiteralUtil::CreateR1<float>(values0);
   std::unique_ptr<GlobalData> data0 =

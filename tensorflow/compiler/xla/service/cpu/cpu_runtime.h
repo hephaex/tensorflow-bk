@@ -45,6 +45,7 @@ namespace runtime {
 extern const char* const kEigenMatMulF16SymbolName;
 extern const char* const kEigenMatMulF32SymbolName;
 extern const char* const kEigenMatMulF64SymbolName;
+extern const char* const kEigenMatMulS32SymbolName;
 extern const char* const kMKLConvF32SymbolName;
 extern const char* const kMKLMatMulF32SymbolName;
 extern const char* const kMKLMatMulF64SymbolName;
@@ -57,6 +58,7 @@ extern const char* const kEigenSingleThreadedFftSymbolName;
 extern const char* const kEigenSingleThreadedMatMulF16SymbolName;
 extern const char* const kEigenSingleThreadedMatMulF32SymbolName;
 extern const char* const kEigenSingleThreadedMatMulF64SymbolName;
+extern const char* const kEigenSingleThreadedMatMulS32SymbolName;
 extern const char* const kEigenSingleThreadedConvF16SymbolName;
 extern const char* const kEigenSingleThreadedConvF32SymbolName;
 extern const char* const kAcquireInfeedBufferForDequeueSymbolName;
@@ -65,6 +67,9 @@ extern const char* const kAcquireOutfeedBufferForPopulationSymbolName;
 extern const char* const kReleaseOutfeedBufferAfterPopulationSymbolName;
 extern const char* const kParallelForkJoinSymbolName;
 extern const char* const kKeyValueSortSymbolName;
+
+extern const char* const kTracingStartSymbolName;
+extern const char* const kTracingEndSymbolName;
 
 // All symbol names for XLA CPU runtime functions need to start with this
 // prefix.
@@ -79,6 +84,13 @@ XfeedManager* GetXfeedManager(int device_ordinal);
 }  // namespace xla
 
 extern "C" {
+
+extern xla::int64 __xla_cpu_runtime_TracingStart(
+    const void* /* xla::ExecutableRunOptions* */ run_options_ptr,
+    const char* name);
+extern void __xla_cpu_runtime_TracingEnd(
+    const void* /* xla::ExecutableRunOptions* */ run_options_ptr,
+    xla::int64 id);
 
 // Some things common to all of the runtime entry points below:
 //

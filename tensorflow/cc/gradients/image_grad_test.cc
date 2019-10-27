@@ -27,6 +27,7 @@ namespace tensorflow {
 namespace {
 
 using ops::Const;
+using ops::CropAndResize;
 using ops::ResizeBicubic;
 using ops::ResizeBilinear;
 using ops::ResizeNearestNeighbor;
@@ -195,29 +196,151 @@ class ScaleAndTranslateGradTest : public ::testing::Test {
   }
 
   template <typename T>
-  void MakeOp(const Tensor& x_data, const Input& y_shape, Output* x,
-              Output* y) {
+  void MakeOp(const Tensor& x_data, const Input& y_shape, Input scale,
+              Input translation, const string& kernel_type, bool antialias,
+              Output* x, Output* y) {
     *x = Const<T>(scope_, x_data);
-    *y = ScaleAndTranslate(scope_, *x, y_shape, {1.8f, 2.1f}, {0.5f, 0.7f});
+    *y = ScaleAndTranslate(scope_, *x, y_shape, scale, translation,
+                           ScaleAndTranslate::KernelType(kernel_type)
+                               .Antialias(antialias)
+                               .Antialias(antialias));
     TF_ASSERT_OK(scope_.status());
   }
 
   template <typename X_T, typename Y_T, typename JAC_T>
-  void TestResize() {
-    TensorShape x_shape({1, 2, 3, 1});
+  void TestScaleAndTranslate(const TensorShape x_shape, const int out_height,
+                             const int out_width, Input scale,
+                             Input translation, const string& kernel_type,
+                             bool antialias) {
     Tensor x_data = MakeData<X_T>(x_shape);
     Output x, y;
-    MakeOp<X_T>(x_data, {4, 6}, &x, &y);
+    MakeOp<X_T>(x_data, {out_height, out_width}, scale, translation,
+                kernel_type, antialias, &x, &y);
     JAC_T max_error;
     TF_ASSERT_OK((ComputeGradientError<X_T, Y_T, JAC_T>(
-        scope_, x, x_data, y, {1, 4, 6, 1}, &max_error)));
+        scope_, x, x_data, y, {1, out_height, out_width, 1}, &max_error)));
+    EXPECT_LT(max_error, 2e-3);
+  }
+
+  const std::vector<Input> kScales = {Input{1.0f, 1.0f}, Input{0.37f, 0.47f},
+                                      Input{2.1f, 2.1f}};
+  const std::vector<Input> kTranslations = {
+      Input{0.0f, 0.0f}, Input{3.14f, 1.19f}, Input{2.1f, 3.1f},
+      Input{100.0f, 200.0f}};
+  Scope scope_;
+};
+
+TEST_F(ScaleAndTranslateGradTest, TestGrads) {
+  const std::vector<std::string> kKernelTypes = {"lanczos1", "lanczos3",
+                                                 "lanczos5", "gaussian"};
+  constexpr int kOutHeight = 4;
+  constexpr int kOutWidth = 6;
+
+  const TensorShape kXShape = TensorShape({1, 2, 3, 1});
+  for (const Input scale : kScales) {
+    for (const Input translation : kTranslations) {
+      for (const std::string& kernel_type : kKernelTypes) {
+        TestScaleAndTranslate<float, float, float>(
+            kXShape, kOutHeight, kOutWidth, scale, translation, kernel_type,
+            true);
+      }
+    }
+  }
+}
+
+TEST_F(ScaleAndTranslateGradTest, TestGradsWithoutAntialias) {
+  constexpr int kOutHeight = 4;
+  constexpr int kOutWidth = 6;
+
+  const TensorShape kXShape = TensorShape({1, 2, 3, 1});
+  for (const Input scale : kScales) {
+    for (const Input translation : kTranslations) {
+      TestScaleAndTranslate<float, float, float>(kXShape, kOutHeight, kOutWidth,
+                                                 scale, translation, "lanczos3",
+                                                 false);
+    }
+  }
+}
+
+TEST_F(ScaleAndTranslateGradTest, TestGradsWithSameShape) {
+  const std::vector<std::string> kKernelTypes = {"lanczos3", "gaussian"};
+
+  constexpr int kOutHeight = 2;
+  constexpr int kOutWidth = 3;
+
+  const TensorShape kXShape = TensorShape({1, 2, 3, 1});
+  for (const Input scale : kScales) {
+    for (const Input translation : kTranslations) {
+      for (const std::string& kernel_type : kKernelTypes) {
+        TestScaleAndTranslate<float, float, float>(
+            kXShape, kOutHeight, kOutWidth, scale, translation, kernel_type,
+            true);
+      }
+    }
+  }
+}
+
+TEST_F(ScaleAndTranslateGradTest, TestGradsWithSmallerShape) {
+  const std::vector<std::string> kKernelTypes = {"lanczos3", "gaussian"};
+  constexpr int kOutHeight = 2;
+  constexpr int kOutWidth = 3;
+
+  const TensorShape kXShape = TensorShape({1, 4, 6, 1});
+  for (const Input scale : kScales) {
+    for (const Input translation : kTranslations) {
+      for (const std::string& kernel_type : kKernelTypes) {
+        TestScaleAndTranslate<float, float, float>(
+            kXShape, kOutHeight, kOutWidth, scale, translation, kernel_type,
+            true);
+      }
+    }
+  }
+}
+
+class CropAndResizeGradTest : public ::testing::Test {
+ protected:
+  CropAndResizeGradTest() : scope_(Scope::NewRootScope()) {}
+
+  template <typename T>
+  Tensor MakeData(const TensorShape& data_shape) {
+    DataType data_type = DataTypeToEnum<T>::v();
+    Tensor data(data_type, data_shape);
+    auto data_flat = data.flat<T>();
+    for (int i = 0; i < data_flat.size(); ++i) {
+      data_flat(i) = T(i);
+    }
+    return data;
+  }
+
+  template <typename T>
+  void MakeOp(const Tensor& x_data, const Input& boxes, const Input& box_ind,
+              const Input& crop_size, Output* x, Output* y) {
+    *x = Const<T>(scope_, x_data);
+    *y = CropAndResize(scope_, *x, boxes, box_ind, crop_size,
+                       CropAndResize::Method("bilinear"));
+    TF_ASSERT_OK(scope_.status());
+  }
+
+  template <typename X_T, typename Y_T, typename JAC_T>
+  void TestCropAndResize() {
+    TensorShape x_shape({1, 4, 2, 1});
+    Tensor x_data = MakeData<X_T>(x_shape);
+    TensorShape box_shape({1, 4});
+    Tensor boxes = MakeData<X_T>(box_shape);
+    Output x, y;
+    MakeOp<X_T>(x_data, boxes, {0}, {1, 1}, &x, &y);
+    JAC_T max_error;
+    TF_ASSERT_OK((ComputeGradientError<X_T, Y_T, JAC_T>(
+        scope_, x, x_data, y, {1, 1, 1, 1}, &max_error)));
     EXPECT_LT(max_error, 1e-3);
   }
 
   Scope scope_;
 };
 
-TEST_F(ScaleAndTranslateGradTest, Works) { TestResize<float, float, float>(); }
+TEST_F(CropAndResizeGradTest, TestCrop) {
+  TestCropAndResize<float, float, float>();
+}
 
 }  // namespace
 }  // namespace tensorflow

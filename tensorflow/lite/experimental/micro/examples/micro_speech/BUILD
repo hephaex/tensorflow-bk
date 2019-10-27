@@ -1,13 +1,14 @@
 # Description:
 #   TensorFlow Lite microcontroller example.
 
-package(default_visibility = ["//visibility:public"])
-
-licenses(["notice"])  # Apache 2.0
-
 load(
     "//tensorflow/lite/experimental/micro/testing:micro_test.bzl",
     "tflite_micro_cc_test",
+)
+
+package(
+    default_visibility = ["//visibility:public"],
+    licenses = ["notice"],  # Apache 2.0
 )
 
 cc_library(
@@ -312,20 +313,50 @@ tflite_micro_cc_test(
     ],
 )
 
+cc_library(
+    name = "command_responder",
+    srcs = [
+        "command_responder.cc",
+    ],
+    hdrs = [
+        "command_responder.h",
+    ],
+    deps = [
+        "//tensorflow/lite/c:c_api_internal",
+        "//tensorflow/lite/experimental/micro:micro_framework",
+    ],
+)
+
+tflite_micro_cc_test(
+    name = "command_responder_test",
+    srcs = [
+        "command_responder_test.cc",
+    ],
+    deps = [
+        ":command_responder",
+        "//tensorflow/lite/c:c_api_internal",
+        "//tensorflow/lite/experimental/micro:micro_framework",
+        "//tensorflow/lite/experimental/micro/testing:micro_test",
+    ],
+)
+
 cc_binary(
     name = "micro_speech",
     srcs = [
         "main.cc",
+        "main_functions.cc",
+        "main_functions.h",
     ],
     deps = [
         ":audio_provider",
+        ":command_responder",
         ":feature_provider",
         ":recognize_commands",
         "//tensorflow/lite:schema_fbs_version",
         "//tensorflow/lite/experimental/micro:micro_framework",
         "//tensorflow/lite/experimental/micro/examples/micro_speech/micro_features:micro_model_settings",
         "//tensorflow/lite/experimental/micro/examples/micro_speech/micro_features:tiny_conv_micro_features_model_data",
-        "//tensorflow/lite/experimental/micro/kernels:all_ops_resolver",
+        "//tensorflow/lite/experimental/micro/kernels:micro_ops",
         "//tensorflow/lite/schema:schema_fbs",
     ],
 )
@@ -334,16 +365,19 @@ cc_binary(
     name = "micro_speech_mock",
     srcs = [
         "main.cc",
+        "main_functions.cc",
+        "main_functions.h",
     ],
     deps = [
         ":audio_provider_mock",
+        ":command_responder",
         ":feature_provider",
         ":recognize_commands",
         "//tensorflow/lite:schema_fbs_version",
         "//tensorflow/lite/experimental/micro:micro_framework",
         "//tensorflow/lite/experimental/micro/examples/micro_speech/micro_features:micro_model_settings",
         "//tensorflow/lite/experimental/micro/examples/micro_speech/micro_features:tiny_conv_micro_features_model_data",
-        "//tensorflow/lite/experimental/micro/kernels:all_ops_resolver",
+        "//tensorflow/lite/experimental/micro/kernels:micro_ops",
         "//tensorflow/lite/schema:schema_fbs",
     ],
 )

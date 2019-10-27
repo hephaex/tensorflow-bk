@@ -22,6 +22,7 @@ import copy
 import itertools
 import math
 
+from absl.testing import parameterized
 import numpy as np
 
 from tensorflow.python.eager import context
@@ -467,7 +468,7 @@ class RMSpropOptimizerTest(test.TestCase):
         learning_rate = lambda: 2.0
         rho = lambda: 0.9
         momentum = lambda: 0.0
-        epsilon = lambda: 1.0
+        epsilon = 1.0
         opt = rmsprop.RMSprop(learning_rate, rho, momentum, epsilon)
 
         # Fetch params to validate initial values
@@ -526,33 +527,68 @@ class RMSpropOptimizerTest(test.TestCase):
       opt = rmsprop.RMSprop(1., momentum=0., centered=False)
       opt.minimize(lambda: v1 + v2, var_list=[v1, v2])
       # There should be iteration, and one unique slot variable for v1 and v2.
-      self.assertEqual(3, len(set(opt.variables())))
+      self.assertEqual(3, len(set({id(v) for v in opt.variables()})))
       self.assertEqual(
           self.evaluate(opt.variables()[0]), self.evaluate(opt.iterations))
 
       opt = rmsprop.RMSprop(learning_rate=1., momentum=0.2, centered=False)
       opt.minimize(lambda: v1 + v2, var_list=[v1, v2])
       # There should be iteration, and two unique slot variables for v1 and v2.
-      self.assertEqual(5, len(set(opt.variables())))
+      self.assertEqual(5, len(set({id(v) for v in opt.variables()})))
       self.assertEqual(
           self.evaluate(opt.variables()[0]), self.evaluate(opt.iterations))
 
       opt = rmsprop.RMSprop(learning_rate=1., momentum=0.2, centered=True)
       opt.minimize(lambda: v1 + v2, var_list=[v1, v2])
       # There should be iteration, and three unique slot variables for v1 and v2
-      self.assertEqual(7, len(set(opt.variables())))
+      self.assertEqual(7, len(set({id(v) for v in opt.variables()})))
       self.assertEqual(
           self.evaluate(opt.variables()[0]), self.evaluate(opt.iterations))
 
-  def testConstructRMSpropWithEpsilonValues(self):
-    opt = rmsprop.RMSprop(epsilon=None)
-    config = opt.get_config()
-    self.assertEqual(config["epsilon"], 1e-7)
 
-    opt = rmsprop.RMSprop(epsilon=1e-8)
-    config = opt.get_config()
-    self.assertEqual(config["epsilon"], 1e-8)
+class SlotColocationTest(test.TestCase, parameterized.TestCase):
 
+  @parameterized.parameters([True, False])
+  @test_util.run_gpu_only
+  @test_util.run_in_graph_and_eager_modes
+  def testRunMinimizeOnGPUForCPUVariables(self, use_resource):
+    with ops.device("/device:CPU:0"):
+      if use_resource:
+        var0 = resource_variable_ops.ResourceVariable([1.0, 2.0],
+                                                      dtype=dtypes.float32)
+        var1 = resource_variable_ops.ResourceVariable([3.0, 4.0],
+                                                      dtype=dtypes.float32)
+      else:
+        var0 = variables.Variable([1.0, 2.0], dtype=dtypes.float32)
+        var1 = variables.Variable([3.0, 4.0], dtype=dtypes.float32)
+
+    def loss():
+      return 5 * var0 + 3 * var1
+
+    opt = rmsprop.RMSprop(
+        learning_rate=1.0, decay=0.9, momentum=0.5, epsilon=1.0)
+
+    # Fetch params to validate initial values
+    self.evaluate(variables.global_variables_initializer())
+    self.assertAllClose([1.0, 2.0], self.evaluate(var0))
+    self.assertAllClose([3.0, 4.0], self.evaluate(var1))
+
+    # Run 1 step through optimizer on GPU.
+    # Slot variables are created the first time optimizer is used on some
+    # variable. This tests that slot variables will be colocated with the base
+    # variable.
+    with ops.device("/device:GPU:0"):
+      # Note that for eager execution, minimize expects a function instead of a
+      # Tensor.
+      opt_op = opt.minimize(loss, [var0, var1])
+      self.evaluate(variables.global_variables_initializer())
+      self.evaluate(opt_op)
+
+    # Validate updated params, All variables should have decreased.
+    self.assertTrue(all(v < 0.0 for v in self.evaluate(var0)),
+                    msg="updated variables: %s" % self.evaluate(var0))
+    self.assertTrue(all(v < 2.0 for v in self.evaluate(var1)),
+                    msg="updated variables: %s" % self.evaluate(var1))
 
 if __name__ == "__main__":
   test.main()

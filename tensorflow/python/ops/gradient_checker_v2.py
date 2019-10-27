@@ -164,7 +164,7 @@ def _compute_theoretical_jacobian(f, y_shape, y_dtype, xs, param):
   dy_data_flat = dy_data.ravel().view(y_dtype.real_dtype.as_numpy_dtype)
   grad_fn_unprep = backprop.gradients_function(f, [param])
   grad_fn = _prepare(lambda dy, *xs: grad_fn_unprep(*xs, dy=dy),
-                     [y_dtype] + [x.dtype for x in xs])
+                     [y_dtype] + [z.dtype for z in xs])
   for col in range(y_size):
     dy_data_flat[col] = 1
     grad = _to_numpy(grad_fn(dy_data, *xs)[0])
@@ -175,7 +175,7 @@ def _compute_theoretical_jacobian(f, y_shape, y_dtype, xs, param):
         r_begin = i * x_val_size
         r_end = r_begin + x_val_size
         jacobian[r_begin:r_end, col] += v.flat
-    else:
+    elif grad is not None:
       jacobian[:, col] = grad.ravel().view(jacobian.dtype)
 
   # If the output is empty, run the gradients at least once and make sure
@@ -267,11 +267,11 @@ def _compute_gradient(f,
   t = x.dtype
   allowed_types = [dtypes.float16, dtypes.bfloat16, dtypes.float32,
                    dtypes.float64, dtypes.complex64, dtypes.complex128]
-  assert t.base_dtype in allowed_types, ("Cannot compute gradient for"
+  assert t.base_dtype in allowed_types, ("Cannot compute gradient for "
                                          "unsupported type %s of argument %s" %
                                          (t.name, param))
   t2 = y_dtype
-  assert t2.base_dtype in allowed_types, ("Cannot compute gradient for"
+  assert t2.base_dtype in allowed_types, ("Cannot compute gradient for "
                                           "unsupported type %s of y" % t2.name)
   y_size = _product(y_shape)
   jacob_t = _compute_theoretical_jacobian(f, y_shape, y_dtype,
@@ -295,13 +295,13 @@ def _compute_gradient_list(f, xs, delta):
 
 @tf_export("test.compute_gradient", v1=[])
 def compute_gradient(f, x, delta=1e-3):
-  """Computes the theoretical and numeric Jacobian of f.
+  """Computes the theoretical and numeric Jacobian of `f`.
 
   With y = f(x), computes the theoretical and numeric Jacobian dy/dx.
 
   Args:
     f: the function.
-    x: a list of tensors.
+    x: a list arguments for the function
     delta: (optional) perturbation used to compute numeric Jacobian.
 
   Returns:
@@ -313,6 +313,18 @@ def compute_gradient(f, x, delta=1e-3):
 
   Raises:
     ValueError: If result is empty but the gradient is nonzero.
+    ValueError: If x is not list, but any other type.
+
+  Example:
+  ```python
+  @tf.function
+  def test_func(x):
+    return x*x
+
+  theoretical, numerical = tf.test.compute_gradient(test_func, [1.0])
+  theoretical, numerical
+  # ((array([[2.]], dtype=float32),), (array([[2.000004]], dtype=float32),))
+  ```
   """
   if not isinstance(x, list):
     raise ValueError(

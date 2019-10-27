@@ -39,6 +39,7 @@ from tensorflow.python.framework import tensor_spec
 from tensorflow.python.framework import tensor_util
 from tensorflow.python.framework import test_util
 from tensorflow.python.keras.engine.sequential import Sequential
+from tensorflow.python.keras.engine.training import Model
 from tensorflow.python.keras.layers.core import Activation
 from tensorflow.python.keras.layers.core import Dense
 from tensorflow.python.lib.io import tf_record
@@ -406,6 +407,69 @@ class SummaryOpsCoreTest(test_util.TensorFlowTestCase):
     self.assertEqual(2, events[2].step)
     self.assertEqual(4, events[3].step)
 
+  def testWriteRawPb(self):
+    logdir = self.get_temp_dir()
+    pb = summary_pb2.Summary()
+    pb.value.add().simple_value = 42.0
+    with context.eager_mode():
+      with summary_ops.create_file_writer_v2(logdir).as_default():
+        output = summary_ops.write_raw_pb(pb.SerializeToString(), step=12)
+        self.assertTrue(output.numpy())
+    events = events_from_logdir(logdir)
+    self.assertEqual(2, len(events))
+    self.assertEqual(12, events[1].step)
+    self.assertProtoEquals(pb, events[1].summary)
+
+  def testWriteRawPb_fromFunction(self):
+    logdir = self.get_temp_dir()
+    pb = summary_pb2.Summary()
+    pb.value.add().simple_value = 42.0
+    with context.eager_mode():
+      writer = summary_ops.create_file_writer_v2(logdir)
+      @def_function.function
+      def f():
+        with writer.as_default():
+          return summary_ops.write_raw_pb(pb.SerializeToString(), step=12)
+      output = f()
+      self.assertTrue(output.numpy())
+    events = events_from_logdir(logdir)
+    self.assertEqual(2, len(events))
+    self.assertEqual(12, events[1].step)
+    self.assertProtoEquals(pb, events[1].summary)
+
+  def testWriteRawPb_multipleValues(self):
+    logdir = self.get_temp_dir()
+    pb1 = summary_pb2.Summary()
+    pb1.value.add().simple_value = 1.0
+    pb1.value.add().simple_value = 2.0
+    pb2 = summary_pb2.Summary()
+    pb2.value.add().simple_value = 3.0
+    pb3 = summary_pb2.Summary()
+    pb3.value.add().simple_value = 4.0
+    pb3.value.add().simple_value = 5.0
+    pb3.value.add().simple_value = 6.0
+    pbs = [pb.SerializeToString() for pb in (pb1, pb2, pb3)]
+    with context.eager_mode():
+      with summary_ops.create_file_writer_v2(logdir).as_default():
+        output = summary_ops.write_raw_pb(pbs, step=12)
+        self.assertTrue(output.numpy())
+    events = events_from_logdir(logdir)
+    self.assertEqual(2, len(events))
+    self.assertEqual(12, events[1].step)
+    expected_pb = summary_pb2.Summary()
+    for i in range(6):
+      expected_pb.value.add().simple_value = i + 1.0
+    self.assertProtoEquals(expected_pb, events[1].summary)
+
+  def testWriteRawPb_invalidValue(self):
+    logdir = self.get_temp_dir()
+    with context.eager_mode():
+      with summary_ops.create_file_writer_v2(logdir).as_default():
+        with self.assertRaisesRegex(
+            errors.DataLossError,
+            'Bad tf.compat.v1.Summary binary proto tensor string'):
+          summary_ops.write_raw_pb('notaproto', step=12)
+
   @test_util.also_run_as_tf_function
   def testGetSetStep(self):
     try:
@@ -506,6 +570,34 @@ class SummaryOpsCoreTest(test_util.TensorFlowTestCase):
     with summary_ops.summary_scope('with/slash') as (tag, _):
       self.assertEqual('with/slash', tag)
 
+  def testAllV2SummaryOps(self):
+    logdir = self.get_temp_dir()
+    def define_ops():
+      result = []
+      # TF 2.0 summary ops
+      result.append(summary_ops.write('write', 1, step=0))
+      result.append(summary_ops.write_raw_pb(b'', step=0, name='raw_pb'))
+      # TF 1.x tf.contrib.summary ops
+      result.append(summary_ops.generic('tensor', 1, step=1))
+      result.append(summary_ops.scalar('scalar', 2.0, step=1))
+      result.append(summary_ops.histogram('histogram', [1.0], step=1))
+      result.append(summary_ops.image('image', [[[[1.0]]]], step=1))
+      result.append(summary_ops.audio('audio', [[1.0]], 1.0, 1, step=1))
+      return result
+    with context.graph_mode():
+      ops_without_writer = define_ops()
+      with summary_ops.create_file_writer_v2(logdir).as_default():
+        with summary_ops.record_if(True):
+          ops_recording_on = define_ops()
+        with summary_ops.record_if(False):
+          ops_recording_off = define_ops()
+      # We should be collecting all ops defined with a default writer present,
+      # regardless of whether recording was set on or off, but not those defined
+      # without a writer at all.
+      del ops_without_writer
+      expected_ops = ops_recording_on + ops_recording_off
+      self.assertCountEqual(expected_ops, summary_ops.all_v2_summary_ops())
+
 
 class SummaryWriterTest(test_util.TensorFlowTestCase):
 
@@ -573,6 +665,22 @@ class SummaryWriterTest(test_util.TensorFlowTestCase):
         f()
     # Even though we didn't use it, an event file will have been created.
     self.assertEqual(1, len(gfile.Glob(os.path.join(logdir, '*'))))
+
+  def testCreate_immediateSetAsDefault_retainsReference(self):
+    logdir = self.get_temp_dir()
+    try:
+      with context.eager_mode():
+        summary_ops.create_file_writer_v2(logdir).set_as_default()
+        summary_ops.flush()
+    finally:
+      # Ensure we clean up no matter how the test executes.
+      summary_ops._summary_state.writer = None  # pylint: disable=protected-access
+
+  def testCreate_immediateAsDefault_retainsReference(self):
+    logdir = self.get_temp_dir()
+    with context.eager_mode():
+      with summary_ops.create_file_writer_v2(logdir).as_default():
+        summary_ops.flush()
 
   def testNoSharing(self):
     # Two writers with the same logdir should not share state.
@@ -657,7 +765,7 @@ class SummaryWriterTest(test_util.TensorFlowTestCase):
       with summary_ops.create_file_writer_v2(
           logdir, max_queue=1, flush_millis=999999).as_default():
         get_total = lambda: len(events_from_logdir(logdir))
-        # Note: First tf.Event is always file_version.
+        # Note: First tf.compat.v1.Event is always file_version.
         self.assertEqual(1, get_total())
         summary_ops.write('tag', 1, step=0)
         self.assertEqual(1, get_total())
@@ -687,9 +795,9 @@ class SummaryWriterTest(test_util.TensorFlowTestCase):
     with context.eager_mode():
       writer = summary_ops.create_file_writer_v2(
           logdir, max_queue=999999, flush_millis=999999)
-      with writer.as_default(), summary_ops.always_record_summaries():
+      with writer.as_default():
         get_total = lambda: len(events_from_logdir(logdir))
-        # Note: First tf.Event is always file_version.
+        # Note: First tf.compat.v1.Event is always file_version.
         self.assertEqual(1, get_total())
         summary_ops.write('tag', 1, step=0)
         summary_ops.write('tag', 1, step=0)
@@ -706,8 +814,14 @@ class SummaryWriterTest(test_util.TensorFlowTestCase):
         summary_ops.flush(writer=writer._resource)  # pylint:disable=protected-access
         self.assertEqual(5, get_total())
 
+  @test_util.assert_no_new_tensors
+  def testNoMemoryLeak_graphMode(self):
+    logdir = self.get_temp_dir()
+    with context.graph_mode(), ops.Graph().as_default():
+      summary_ops.create_file_writer_v2(logdir)
+
   @test_util.assert_no_new_pyobjects_executing_eagerly
-  def testEagerMemory(self):
+  def testNoMemoryLeak_eagerMode(self):
     logdir = self.get_temp_dir()
     with summary_ops.create_file_writer_v2(logdir).as_default():
       summary_ops.write('tag', 1, step=0)
@@ -946,7 +1060,7 @@ class SummaryOpsTest(test_util.TensorFlowTestCase):
          Activation('relu', name='my_relu')])
     event = self.keras_model(name='my_name', data=model, step=1)
     first_val = event.summary.value[0]
-    self.assertEqual(model.to_json(), first_val.tensor.string_val[0])
+    self.assertEqual(model.to_json(), first_val.tensor.string_val[0].decode())
 
   @test_util.run_v2_only
   def testKerasModel_usesDefaultStep(self):
@@ -960,6 +1074,40 @@ class SummaryOpsTest(test_util.TensorFlowTestCase):
     finally:
       # Reset to default state for other tests.
       summary_ops.set_step(None)
+
+  @test_util.run_v2_only
+  def testKerasModel_subclass(self):
+
+    class SimpleSubclass(Model):
+
+      def __init__(self):
+        super(SimpleSubclass, self).__init__(name='subclass')
+        self.dense = Dense(10, input_shape=(100,))
+        self.activation = Activation('relu', name='my_relu')
+
+      def call(self, inputs):
+        x = self.dense(inputs)
+        return self.activation(x)
+
+    model = SimpleSubclass()
+    with test.mock.patch.object(logging, 'warn') as mock_log:
+      self.assertFalse(
+          summary_ops.keras_model(name='my_name', data=model, step=1))
+      self.assertRegexpMatches(
+          str(mock_log.call_args), 'Model failed to serialize as JSON.')
+
+  @test_util.run_v2_only
+  def testKerasModel_otherExceptions(self):
+    model = Sequential()
+
+    with test.mock.patch.object(model, 'to_json') as mock_to_json:
+      with test.mock.patch.object(logging, 'warn') as mock_log:
+        mock_to_json.side_effect = Exception('oops')
+        self.assertFalse(
+            summary_ops.keras_model(name='my_name', data=model, step=1))
+        self.assertRegexpMatches(
+            str(mock_log.call_args),
+            'Model failed to serialize as JSON. Ignoring... oops')
 
   @test_util.run_v2_only
   def testTrace(self):
@@ -992,6 +1140,14 @@ class SummaryOpsTest(test_util.TensorFlowTestCase):
     with test.mock.patch.object(logging, 'warn') as mock_log:
       f()
       self.assertRegexpMatches(
+          str(mock_log.call_args), 'Cannot enable trace inside a tf.function.')
+
+  @test_util.run_v2_only
+  def testTrace_cannotEnableTraceInGraphMode(self):
+    with test.mock.patch.object(logging, 'warn') as mock_log:
+      with context.graph_mode():
+        summary_ops.trace_on(graph=True, profiler=False)
+      self.assertRegexpMatches(
           str(mock_log.call_args), 'Must enable trace in eager mode.')
 
   @test_util.run_v2_only
@@ -1013,6 +1169,15 @@ class SummaryOpsTest(test_util.TensorFlowTestCase):
 
     with test.mock.patch.object(logging, 'warn') as mock_log:
       f()
+      self.assertRegexpMatches(
+          str(mock_log.call_args),
+          'Cannot export trace inside a tf.function.')
+
+  @test_util.run_v2_only
+  def testTrace_cannotExportTraceInGraphMode(self):
+    with test.mock.patch.object(logging, 'warn') as mock_log:
+      with context.graph_mode():
+        summary_ops.trace_export(name='foo', step=1)
       self.assertRegexpMatches(
           str(mock_log.call_args),
           'Can only export trace while executing eagerly.')
