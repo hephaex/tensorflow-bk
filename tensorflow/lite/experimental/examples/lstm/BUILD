@@ -6,6 +6,19 @@ package(
 )
 
 py_library(
+    name = "input_data",
+    srcs = ["input_data.py"],
+    srcs_version = "PY2AND3",
+    visibility = ["//visibility:private"],
+    deps = [
+        "//tensorflow/python:framework",
+        "//tensorflow/python:platform",
+        "//third_party/py/numpy",
+        "@six_archive//:six",
+    ],
+)
+
+py_library(
     name = "rnn",
     srcs = ["rnn.py"],
     srcs_version = "PY2AND3",
@@ -35,7 +48,7 @@ py_library(
 
 py_test(
     name = "unidirectional_sequence_lstm_test",
-    size = "large",
+    size = "medium",
     srcs = ["unidirectional_sequence_lstm_test.py"],
     python_version = "PY3",
     srcs_version = "PY2AND3",
@@ -44,10 +57,10 @@ py_test(
         "no_pip",
     ],
     deps = [
+        ":input_data",
         ":rnn",
         ":rnn_cell",
         "//tensorflow:tensorflow_py",
-        "//tensorflow/examples/tutorials/mnist:input_data",
         "//tensorflow/lite/python:lite",
         "//tensorflow/python:framework",
         "//tensorflow/python:platform",
@@ -58,7 +71,7 @@ py_test(
 
 py_test(
     name = "unidirectional_sequence_rnn_test",
-    size = "large",
+    size = "medium",
     srcs = ["unidirectional_sequence_rnn_test.py"],
     python_version = "PY3",
     srcs_version = "PY2AND3",
@@ -67,10 +80,10 @@ py_test(
         "no_pip",
     ],
     deps = [
+        ":input_data",
         ":rnn",
         ":rnn_cell",
         "//tensorflow:tensorflow_py",
-        "//tensorflow/examples/tutorials/mnist:input_data",
         "//tensorflow/lite/python:lite",
         "//tensorflow/python:framework_test_lib",
         "//tensorflow/python:platform",
@@ -81,7 +94,7 @@ py_test(
 
 py_test(
     name = "bidirectional_sequence_lstm_test",
-    size = "large",
+    size = "medium",
     srcs = ["bidirectional_sequence_lstm_test.py"],
     python_version = "PY3",
     srcs_version = "PY2AND3",
@@ -90,10 +103,10 @@ py_test(
         "no_pip",
     ],
     deps = [
+        ":input_data",
         ":rnn",
         ":rnn_cell",
         "//tensorflow:tensorflow_py",
-        "//tensorflow/examples/tutorials/mnist:input_data",
         "//tensorflow/lite/python:lite",
         "//tensorflow/python:framework_test_lib",
         "//tensorflow/python:platform",
@@ -104,7 +117,7 @@ py_test(
 
 py_test(
     name = "bidirectional_sequence_rnn_test",
-    size = "large",
+    size = "medium",
     srcs = ["bidirectional_sequence_rnn_test.py"],
     python_version = "PY3",
     srcs_version = "PY2AND3",
@@ -113,10 +126,10 @@ py_test(
         "no_pip",
     ],
     deps = [
+        ":input_data",
         ":rnn",
         ":rnn_cell",
         "//tensorflow:tensorflow_py",
-        "//tensorflow/examples/tutorials/mnist:input_data",
         "//tensorflow/lite/python:lite",
         "//tensorflow/python:framework_test_lib",
         "//tensorflow/python:platform",

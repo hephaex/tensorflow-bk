@@ -1,3 +1,4 @@
+load("//tensorflow:tensorflow.bzl", "filegroup")
 load("//tensorflow/compiler/mlir:glob_lit_test.bzl", "glob_lit_tests")
 load("//tensorflow:tensorflow.bzl", "tf_native_cc_binary")
 
@@ -8,10 +9,11 @@ glob_lit_tests(
         ":extra_files",
         ":test_utilities",
     ],
-    driver = "@local_config_mlir//:run_lit.sh",
+    driver = "@llvm-project//mlir:run_lit.sh",
     test_file_exts = [
         "mlir",
         "cc",
+        "json",
     ],
 )
 
@@ -20,10 +22,13 @@ filegroup(
     name = "test_utilities",
     testonly = True,
     data = [
+        ":importer_test_legacy_reshape",
         ":importer_test_min_max",
+        ":test_schema.fbs",
         "//tensorflow/compiler/mlir/lite:flatbuffer_to_string",
         "//tensorflow/compiler/mlir/lite:flatbuffer_translate",
-        "@llvm//:FileCheck",
+        "//tensorflow/compiler/mlir/lite:json_to_flatbuffer",
+        "@llvm-project//llvm:FileCheck",
     ],
 )
 
@@ -31,7 +36,10 @@ filegroup(
 filegroup(
     name = "extra_files",
     srcs = glob(
-        ["**/*.cc.mlir"],
+        [
+            "**/importer_test_min_max.cc.mlir",
+            "**/reshape.mlir",
+        ],
     ),
 )
 
@@ -47,6 +55,22 @@ tf_native_cc_binary(
         "//tensorflow/lite:framework",
         "//tensorflow/lite/schema:schema_fbs",
         "@com_google_absl//absl/strings",
-        "@llvm//:support",
+        "@llvm-project//llvm:Support",
+    ],
+)
+
+# A binary to produce legacy shape op which doesn't use the second operand.
+# A file check command is used to verify the imported result from this
+# binary format.
+tf_native_cc_binary(
+    name = "importer_test_legacy_reshape",
+    srcs = [
+        "importer_test_legacy_reshape.cc",
+    ],
+    deps = [
+        "//tensorflow/lite:framework",
+        "//tensorflow/lite/schema:schema_fbs",
+        "@com_google_absl//absl/strings",
+        "@llvm-project//llvm:Support",
     ],
 )

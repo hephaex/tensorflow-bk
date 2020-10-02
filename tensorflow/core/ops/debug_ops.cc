@@ -90,7 +90,17 @@ REGISTER_OP("DebugIdentityV2")
     .Attr("output_slot: int = -1")
     .Attr("tensor_debug_mode: int = -1")
     .Attr("debug_urls: list(string) = []")
+    .Attr("circular_buffer_size: int = 1000")
+    .Attr("tfdbg_run_id: string = ''")
     .SetIsStateful()
     .SetShapeFn(shape_inference::UnchangedShape);
 
+REGISTER_OP("DebugNumericSummaryV2")
+    .Input("input: T")
+    .Output("output: output_dtype")
+    .Attr("output_dtype: {float32, float64} = DT_FLOAT")
+    .Attr("T: type")
+    .Attr("tensor_debug_mode: int = -1")
+    .Attr("tensor_id: int = -1")
+    .SetShapeFn(shape_inference::UnknownShape);
 }  // namespace tensorflow

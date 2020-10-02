@@ -84,11 +84,10 @@ Status RunGpuConvForward(GpuConvParams params,
         "StreamExecutor doesn't support scaled convolution: %lf.",
         params.conv_result_scale);
   }
-  stream->ThenConvolveWithAlgorithm(
+  return stream->ConvolveWithAlgorithm(
       params.input_descriptor, input_buf, params.filter_descriptor, filter_buf,
       params.conv_desc, params.output_descriptor, &output_buf,
       scratch_allocator, algorithm, options.profile_result);
-  return Status::OK();
 }
 
 template <typename ElementType, typename BiasType, typename OutputType>
@@ -123,15 +122,13 @@ Status RunGpuConvForwardActivation(GpuConvParams params,
     side_input = output_buf;
   }
 
-  stream->ThenFusedConvolveWithAlgorithm(
+  return stream->FusedConvolveWithAlgorithm(
       params.input_descriptor, input_buf, params.conv_result_scale,
       params.filter_descriptor, filter_buf, params.conv_desc, side_input,
       params.fusion->side_input_scale, bias_desc,
       DeviceMemory<BiasType>(params.fusion->bias_buf), params.fusion->mode,
       params.output_descriptor, &output_buf, scratch_allocator, algorithm,
       options.profile_result);
-
-  return Status::OK();
 }
 
 // StreamExecutor supports various data types via overloading, and the support
@@ -162,7 +159,7 @@ Status RunGpuConvInternalImpl(GpuConvParams params,
             "StreamExecutor doesn't support scaled convolution: %lf.",
             params.conv_result_scale);
       }
-      stream->ThenConvolveBackwardDataWithAlgorithm(
+      return stream->ConvolveBackwardDataWithAlgorithm(
           params.filter_descriptor, filter_buf, params.output_descriptor,
           output_buf, params.conv_desc, params.input_descriptor, &input_buf,
           scratch_allocator, algorithm, options.profile_result);
@@ -173,7 +170,7 @@ Status RunGpuConvInternalImpl(GpuConvParams params,
             "StreamExecutor doesn't support scaled convolution: %lf.",
             params.conv_result_scale);
       }
-      stream->ThenConvolveBackwardFilterWithAlgorithm(
+      return stream->ConvolveBackwardFilterWithAlgorithm(
           params.input_descriptor, input_buf, params.output_descriptor,
           output_buf, params.conv_desc, params.filter_descriptor, &filter_buf,
           scratch_allocator, algorithm, options.profile_result);
@@ -223,18 +220,11 @@ Status RunGpuConvImpl(const GpuConvParams& params,
   auto output_buf = se::DeviceMemory<OutputType>(params.output_buf);
   AlgorithmConfig algorithm = params.algorithm;
 
-  // in ROCm mode, the first call to run the convolution needs to trigger the
-  // code that calls miopenFind* API. That triggger is implicit, it is based
-  // on whether or not the AlgorithmConfig::algorithm is empty! So for the
-  // first call we need to ensure that the AlgorithmConfig::algorithm is
-  // empty. For all subsequent calls, we should use the value retrieved from
-  // the backend_config
-  if ((stream->parent()->platform_kind() == se::PlatformKind::kROCm) &&
-      (options.algo_override.has_value()) &&
-      (*options.algo_override == se::dnn::AlgorithmDesc())) {
-    algorithm = AlgorithmConfig();
-  } else if (options.algo_override.has_value()) {
+  if (options.algo_override.has_value()) {
     algorithm = AlgorithmConfig(*options.algo_override);
+    if (options.scratch_size_override.has_value()) {
+      algorithm.set_scratch_size(*options.scratch_size_override);
+    }
   }
 
   Status run_status = RunGpuConvInternalImpl<ElementType, BiasType, OutputType>(
@@ -347,7 +337,7 @@ StatusOr<GpuConvParams> GetGpuConvParams(
 
   const int num_dimensions = window.dimensions_size();
   CHECK_LE(num_dimensions, 3) << conv->ToString();
-  CHECK_GE(num_dimensions, 1) << conv->ToString();
+
   // cuDNN does not support 1D convolutions. We therefore express 1D
   // convolutions as 2D convolutions where the first spatial dimension is 1.
   // This matches the behavior of TF (see definition of conv1d in
@@ -356,7 +346,8 @@ StatusOr<GpuConvParams> GetGpuConvParams(
 
   // If one dimension is reversed, we need to have all dimensions reversed (so
   // we're doing convolution not cross correlation).
-  const bool dims_reversed = window.dimensions()[0].window_reversal();
+  const bool dims_reversed =
+      window.dimensions_size() > 0 && window.dimensions()[0].window_reversal();
 
   CHECK_EQ(num_dimensions, dnums.input_spatial_dimensions_size())
       << conv->ToString();
@@ -439,12 +430,12 @@ StatusOr<GpuConvParams> GetGpuConvParams(
   }
 
   // Add a singleton dimension in the 1D convolution case.
-  if (num_dimensions == 1) {
-    input_descriptor.set_spatial_dim(static_cast<DimIndex>(0), 1);
-    output_descriptor.set_spatial_dim(static_cast<DimIndex>(0), 1);
-    filter_descriptor.set_spatial_dim(static_cast<DimIndex>(0), 1);
-    params.conv_desc.set_zero_padding(static_cast<DimIndex>(0), 0)
-        .set_filter_stride(static_cast<DimIndex>(0), 1);
+  for (int dim = 0; dim < effective_num_dimensions - num_dimensions; dim++) {
+    input_descriptor.set_spatial_dim(static_cast<DimIndex>(dim), 1);
+    output_descriptor.set_spatial_dim(static_cast<DimIndex>(dim), 1);
+    filter_descriptor.set_spatial_dim(static_cast<DimIndex>(dim), 1);
+    params.conv_desc.set_zero_padding(static_cast<DimIndex>(dim), 0)
+        .set_filter_stride(static_cast<DimIndex>(dim), 1);
   }
 
   return params;
@@ -490,11 +481,12 @@ Status RunGpuConv(const HloCustomCallInstruction* conv,
           return RunGpuConvImpl<int8, float, int8>(params, scratch_allocator,
                                                    stream, options);
         default:
-          LOG(FATAL) << conv->ToString();
+          return Unimplemented("Unimplemented convolution %s",
+                               conv->ToString());
       }
     }
     default:
-      LOG(FATAL) << conv->ToString();
+      return Unimplemented("Unimplemented convolution %s", conv->ToString());
   }
 }
 

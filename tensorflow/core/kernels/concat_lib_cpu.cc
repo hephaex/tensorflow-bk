@@ -57,10 +57,9 @@ int64 EstimateBytesPerElement(
 // reshapes all the inputs to matrices), by sampling the lengths of the actual
 // strings in the various tensors.
 template <>
-int64 EstimateBytesPerElement<std::string>(
+int64 EstimateBytesPerElement<tstring>(
     const std::vector<
-        std::unique_ptr<typename TTypes<std::string, 2>::ConstMatrix>>&
-        inputs) {
+        std::unique_ptr<typename TTypes<tstring, 2>::ConstMatrix>>& inputs) {
   // randomly sample a few input strings to get a sense of the average size
   // of each element
   int num_samples = 0;
@@ -117,8 +116,6 @@ REGISTER(qint8)
 REGISTER(quint16)
 REGISTER(qint16)
 REGISTER(qint32)
-REGISTER(uint32)
-REGISTER(uint64)
 
 #if defined(IS_MOBILE_PLATFORM) && !defined(SUPPORT_SELECTIVE_REGISTRATION) && \
     !defined(__ANDROID_TYPES_FULL__)
@@ -130,24 +127,4 @@ REGISTER(tstring);
         // !defined(SUPPORT_SELECTIVE_REGISTRATION) &&
         // !defined(__ANDROID_TYPES_FULL__)
 
-#ifdef TENSORFLOW_USE_SYCL
-template <typename T>
-void ConcatSYCL(
-    const Eigen::SyclDevice& d,
-    const std::vector<std::unique_ptr<typename TTypes<T, 2>::ConstMatrix>>&
-        inputs,
-    typename TTypes<T, 2>::Matrix* output) {
-  ConcatSYCLImpl<T>(d, inputs, sizeof(T) /* cost_per_unit */, MemCpyCopier<T>(),
-                    output);
-}
-#define REGISTER_SYCL(T)                                                       \
-  template void ConcatSYCL<T>(                                                 \
-      const Eigen::SyclDevice&,                                                \
-      const std::vector<std::unique_ptr<typename TTypes<T, 2>::ConstMatrix>>&, \
-      typename TTypes<T, 2>::Matrix* output);
-
-TF_CALL_GPU_NUMBER_TYPES_NO_HALF(REGISTER_SYCL)
-
-#undef REGISTER_SYCL
-#endif  // TENSORFLOW_USE_SYCL
 }  // namespace tensorflow

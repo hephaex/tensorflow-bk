@@ -17,15 +17,15 @@ limitations under the License.
 
 #include <errno.h>
 
-#include "tensorflow/core/lib/core/status.h"
-#include "tensorflow/core/lib/io/path.h"
-#include "tensorflow/core/lib/strings/strcat.h"
 #include "tensorflow/core/platform/env.h"
 #include "tensorflow/core/platform/error.h"
 #include "tensorflow/core/platform/file_system.h"
 #include "tensorflow/core/platform/file_system_helper.h"
 #include "tensorflow/core/platform/logging.h"
 #include "tensorflow/core/platform/mutex.h"
+#include "tensorflow/core/platform/path.h"
+#include "tensorflow/core/platform/status.h"
+#include "tensorflow/core/platform/strcat.h"
 #include "third_party/hadoop/hdfs.h"
 
 namespace tensorflow {
@@ -70,7 +70,7 @@ class LibHDFS {
  private:
   void LoadAndBind() {
     auto TryLoadAndBind = [this](const char* name, void** handle) -> Status {
-      TF_RETURN_IF_ERROR(Env::Default()->LoadLibrary(name, handle));
+      TF_RETURN_IF_ERROR(Env::Default()->LoadDynamicLibrary(name, handle));
 #define BIND_HDFS_FUNC(function) \
   TF_RETURN_IF_ERROR(BindFunc(*handle, #function, &function));
 
@@ -135,16 +135,35 @@ const LibHDFS* libhdfs() {
   return libhdfs;
 }
 
-// We rely on HDFS connection caching here. The HDFS client calls
-// org.apache.hadoop.fs.FileSystem.get(), which caches the connection
-// internally.
+Status SplitArchiveNameAndPath(StringPiece& path, string& nn) {
+  size_t index_end_archive_name = path.find(".har");
+  if (index_end_archive_name == path.npos) {
+    return errors::InvalidArgument(
+        "Hadoop archive path does not contain a .har extension");
+  }
+  // Case of hadoop archive. Namenode is the path to the archive.
+  std::ostringstream namenodestream;
+  namenodestream << "har://" << nn
+                 << path.substr(0, index_end_archive_name + 4);
+  nn = namenodestream.str();
+  path.remove_prefix(index_end_archive_name + 4);
+  if (path.empty()) {
+    // Root of the archive
+    path = "/";
+  }
+  return Status::OK();
+}
+
+// We implement connection caching in Tensorflow, which can significantly
+// improve performance. Fixes #43187
 Status HadoopFileSystem::Connect(StringPiece fname, hdfsFS* fs) {
   TF_RETURN_IF_ERROR(libhdfs()->status());
 
   StringPiece scheme, namenode, path;
   io::ParseURI(fname, &scheme, &namenode, &path);
-  const string nn(namenode);
+  string nn(namenode);
 
+  string cacheKey(scheme.data(), scheme.size());
   hdfsBuilder* builder = libhdfs()->hdfsNewBuilder();
   if (scheme == "file") {
     libhdfs()->hdfsBuilderSetNameNode(builder, nullptr);
@@ -163,13 +182,25 @@ Status HadoopFileSystem::Connect(StringPiece fname, hdfsFS* fs) {
     // configuration files). See:
     // https://github.com/tensorflow/tensorflow/blob/v1.0.0/third_party/hadoop/hdfs.h#L259
     libhdfs()->hdfsBuilderSetNameNode(builder, "default");
+  } else if (scheme == "har") {
+    TF_RETURN_IF_ERROR(SplitArchiveNameAndPath(path, nn));
+    libhdfs()->hdfsBuilderSetNameNode(builder, nn.c_str());
+    cacheKey += nn;
   } else {
     libhdfs()->hdfsBuilderSetNameNode(builder,
                                       nn.empty() ? "default" : nn.c_str());
+    cacheKey += nn;
   }
-  *fs = libhdfs()->hdfsBuilderConnect(builder);
-  if (*fs == nullptr) {
-    return errors::NotFound(strerror(errno));
+  {
+    mutex_lock lock(mu_);
+    if (connectionCache_.find(cacheKey) == connectionCache_.end()) {
+      hdfsFS cacheFs = libhdfs()->hdfsBuilderConnect(builder);
+      if (cacheFs == nullptr) {
+        return errors::NotFound(strerror(errno));
+      }
+      connectionCache_[cacheKey] = cacheFs;
+    }
+    *fs = connectionCache_[cacheKey];
   }
   return Status::OK();
 }
@@ -187,7 +218,14 @@ class HDFSRandomAccessFile : public RandomAccessFile {
       : filename_(filename),
         hdfs_filename_(hdfs_filename),
         fs_(fs),
-        file_(file) {}
+        file_(file) {
+    const char* disable_eof_retried = getenv("HDFS_DISABLE_READ_EOF_RETRIED");
+    if (disable_eof_retried && disable_eof_retried[0] == '1') {
+      disable_eof_retried_ = true;
+    } else {
+      disable_eof_retried_ = false;
+    }
+  }
 
   ~HDFSRandomAccessFile() override {
     if (file_ != nullptr) {
@@ -206,6 +244,10 @@ class HDFSRandomAccessFile : public RandomAccessFile {
     Status s;
     char* dst = scratch;
     bool eof_retried = false;
+    if (disable_eof_retried_) {
+      // eof_retried = true, avoid calling hdfsOpenFile in Read, Fixes #42597
+      eof_retried = true;
+    }
     while (n > 0 && s.ok()) {
       // We lock inside the loop rather than outside so we don't block other
       // concurrent readers.
@@ -252,13 +294,15 @@ class HDFSRandomAccessFile : public RandomAccessFile {
   string filename_;
   string hdfs_filename_;
   hdfsFS fs_;
+  bool disable_eof_retried_;
 
   mutable mutex mu_;
-  mutable hdfsFile file_ GUARDED_BY(mu_);
+  mutable hdfsFile file_ TF_GUARDED_BY(mu_);
 };
 
 Status HadoopFileSystem::NewRandomAccessFile(
-    const string& fname, std::unique_ptr<RandomAccessFile>* result) {
+    const string& fname, TransactionToken* token,
+    std::unique_ptr<RandomAccessFile>* result) {
   hdfsFS fs = nullptr;
   TF_RETURN_IF_ERROR(Connect(fname, &fs));
 
@@ -284,9 +328,24 @@ class HDFSWritableFile : public WritableFile {
   }
 
   Status Append(StringPiece data) override {
-    if (libhdfs()->hdfsWrite(fs_, file_, data.data(),
-                             static_cast<tSize>(data.size())) == -1) {
-      return IOError(filename_, errno);
+    size_t cur_pos = 0, write_len = 0;
+    bool retry = false;
+    // max() - 2 can avoid OutOfMemoryError in JVM .
+    static const size_t max_len_once =
+        static_cast<size_t>(std::numeric_limits<tSize>::max() - 2);
+    while (cur_pos < data.size()) {
+      write_len = std::min(data.size() - cur_pos, max_len_once);
+      tSize w = libhdfs()->hdfsWrite(fs_, file_, data.data() + cur_pos,
+                                     static_cast<tSize>(write_len));
+      if (w == -1) {
+        if (!retry && (errno == EINTR || errno == EAGAIN)) {
+          retry = true;
+        } else {
+          return IOError(filename_, errno);
+        }
+      } else {
+        cur_pos += w;
+      }
     }
     return Status::OK();
   }
@@ -335,7 +394,8 @@ class HDFSWritableFile : public WritableFile {
 };
 
 Status HadoopFileSystem::NewWritableFile(
-    const string& fname, std::unique_ptr<WritableFile>* result) {
+    const string& fname, TransactionToken* token,
+    std::unique_ptr<WritableFile>* result) {
   hdfsFS fs = nullptr;
   TF_RETURN_IF_ERROR(Connect(fname, &fs));
 
@@ -349,7 +409,8 @@ Status HadoopFileSystem::NewWritableFile(
 }
 
 Status HadoopFileSystem::NewAppendableFile(
-    const string& fname, std::unique_ptr<WritableFile>* result) {
+    const string& fname, TransactionToken* token,
+    std::unique_ptr<WritableFile>* result) {
   hdfsFS fs = nullptr;
   TF_RETURN_IF_ERROR(Connect(fname, &fs));
 
@@ -363,7 +424,8 @@ Status HadoopFileSystem::NewAppendableFile(
 }
 
 Status HadoopFileSystem::NewReadOnlyMemoryRegionFromFile(
-    const string& fname, std::unique_ptr<ReadOnlyMemoryRegion>* result) {
+    const string& fname, TransactionToken* token,
+    std::unique_ptr<ReadOnlyMemoryRegion>* result) {
   // hadoopReadZero() technically supports this call with the following
   // caveats:
   // - It only works up to 2 GB. We'd have to Stat() the file to ensure that
@@ -373,7 +435,8 @@ Status HadoopFileSystem::NewReadOnlyMemoryRegionFromFile(
   return errors::Unimplemented("HDFS does not support ReadOnlyMemoryRegion");
 }
 
-Status HadoopFileSystem::FileExists(const string& fname) {
+Status HadoopFileSystem::FileExists(const string& fname,
+                                    TransactionToken* token) {
   hdfsFS fs = nullptr;
   TF_RETURN_IF_ERROR(Connect(fname, &fs));
   if (libhdfs()->hdfsExists(fs, TranslateName(fname).c_str()) == 0) {
@@ -382,7 +445,7 @@ Status HadoopFileSystem::FileExists(const string& fname) {
   return errors::NotFound(fname, " not found.");
 }
 
-Status HadoopFileSystem::GetChildren(const string& dir,
+Status HadoopFileSystem::GetChildren(const string& dir, TransactionToken* token,
                                      std::vector<string>* result) {
   result->clear();
   hdfsFS fs = nullptr;
@@ -391,7 +454,7 @@ Status HadoopFileSystem::GetChildren(const string& dir,
   // hdfsListDirectory returns nullptr if the directory is empty. Do a separate
   // check to verify the directory exists first.
   FileStatistics stat;
-  TF_RETURN_IF_ERROR(Stat(dir, &stat));
+  TF_RETURN_IF_ERROR(Stat(dir, token, &stat));
 
   int entries = 0;
   hdfsFileInfo* info =
@@ -411,11 +474,13 @@ Status HadoopFileSystem::GetChildren(const string& dir,
 }
 
 Status HadoopFileSystem::GetMatchingPaths(const string& pattern,
+                                          TransactionToken* token,
                                           std::vector<string>* results) {
   return internal::GetMatchingPaths(this, Env::Default(), pattern, results);
 }
 
-Status HadoopFileSystem::DeleteFile(const string& fname) {
+Status HadoopFileSystem::DeleteFile(const string& fname,
+                                    TransactionToken* token) {
   hdfsFS fs = nullptr;
   TF_RETURN_IF_ERROR(Connect(fname, &fs));
 
@@ -426,7 +491,7 @@ Status HadoopFileSystem::DeleteFile(const string& fname) {
   return Status::OK();
 }
 
-Status HadoopFileSystem::CreateDir(const string& dir) {
+Status HadoopFileSystem::CreateDir(const string& dir, TransactionToken* token) {
   hdfsFS fs = nullptr;
   TF_RETURN_IF_ERROR(Connect(dir, &fs));
 
@@ -436,7 +501,7 @@ Status HadoopFileSystem::CreateDir(const string& dir) {
   return Status::OK();
 }
 
-Status HadoopFileSystem::DeleteDir(const string& dir) {
+Status HadoopFileSystem::DeleteDir(const string& dir, TransactionToken* token) {
   hdfsFS fs = nullptr;
   TF_RETURN_IF_ERROR(Connect(dir, &fs));
 
@@ -451,11 +516,11 @@ Status HadoopFileSystem::DeleteDir(const string& dir) {
     libhdfs()->hdfsFreeFileInfo(info, entries);
   }
   // Due to HDFS bug HDFS-8407, we can't distinguish between an error and empty
-  // folder, expscially for Kerberos enable setup, EAGAIN is quite common when
+  // folder, especially for Kerberos enable setup, EAGAIN is quite common when
   // the call is actually successful. Check again by Stat.
   if (info == nullptr && errno != 0) {
     FileStatistics stat;
-    TF_RETURN_IF_ERROR(Stat(dir, &stat));
+    TF_RETURN_IF_ERROR(Stat(dir, token, &stat));
   }
 
   if (entries > 0) {
@@ -468,7 +533,8 @@ Status HadoopFileSystem::DeleteDir(const string& dir) {
   return Status::OK();
 }
 
-Status HadoopFileSystem::GetFileSize(const string& fname, uint64* size) {
+Status HadoopFileSystem::GetFileSize(const string& fname,
+                                     TransactionToken* token, uint64* size) {
   hdfsFS fs = nullptr;
   TF_RETURN_IF_ERROR(Connect(fname, &fs));
 
@@ -482,7 +548,8 @@ Status HadoopFileSystem::GetFileSize(const string& fname, uint64* size) {
   return Status::OK();
 }
 
-Status HadoopFileSystem::RenameFile(const string& src, const string& target) {
+Status HadoopFileSystem::RenameFile(const string& src, const string& target,
+                                    TransactionToken* token) {
   hdfsFS fs = nullptr;
   TF_RETURN_IF_ERROR(Connect(src, &fs));
 
@@ -499,7 +566,8 @@ Status HadoopFileSystem::RenameFile(const string& src, const string& target) {
   return Status::OK();
 }
 
-Status HadoopFileSystem::Stat(const string& fname, FileStatistics* stats) {
+Status HadoopFileSystem::Stat(const string& fname, TransactionToken* token,
+                              FileStatistics* stats) {
   hdfsFS fs = nullptr;
   TF_RETURN_IF_ERROR(Connect(fname, &fs));
 
@@ -517,5 +585,6 @@ Status HadoopFileSystem::Stat(const string& fname, FileStatistics* stats) {
 
 REGISTER_FILE_SYSTEM("hdfs", HadoopFileSystem);
 REGISTER_FILE_SYSTEM("viewfs", HadoopFileSystem);
+REGISTER_FILE_SYSTEM("har", HadoopFileSystem);
 
 }  // namespace tensorflow

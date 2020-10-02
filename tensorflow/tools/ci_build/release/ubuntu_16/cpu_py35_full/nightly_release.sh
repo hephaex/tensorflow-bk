@@ -17,25 +17,34 @@ set -e
 set -x
 
 source tensorflow/tools/ci_build/release/common.sh
-set_bazel_outdir
 
 install_ubuntu_16_pip_deps pip3.5
 
+install_bazelisk
+
 python2.7 tensorflow/tools/ci_build/update_version.py --nightly
 
-# Run configure.
-export TF_NEED_GCP=1
-export TF_NEED_HDFS=1
-export TF_NEED_S3=1
-export TF_NEED_CUDA=0
-export CC_OPT_FLAGS='-mavx'
-export PYTHON_BIN_PATH=$(which python3.5)
-yes "" | "$PYTHON_BIN_PATH" configure.py
+# Remove need to run configure to set TF_NEED_CUDA=0, TF_NEED_ROCM=0, and
+# CC_OPT_FLAGS='-mavx' and create .tf_configure.bazelrc with touch and echo.
+touch .tf_configure.bazelrc
+echo "build --action_env PYTHON_BIN_PATH=\"/usr/local/bin/python3.5\"" >> .tf_configure.bazelrc
+echo "build --action_env PYTHON_LIB_PATH=\"/usr/local/lib/python3.5/site-packages\"" >> .tf_configure.bazelrc
+echo "build --python_path=\"/usr/local/bin/python3.5\"" >> .tf_configure.bazelrc
+echo "build --config=xla" >> .tf_configure.bazelrc
+echo "build:opt --copt=-mavx" >> .tf_configure.bazelrc
+echo "build:opt --host_copt=-march=native" >> .tf_configure.bazelrc
+echo "build:opt --define with_default_optimizations=true" >> .tf_configure.bazelrc
+echo "test --flaky_test_attempts=3" >> .tf_configure.bazelrc
+echo "test --test_size_filters=small,medium" >> .tf_configure.bazelrc
+echo "test:v1 --test_tag_filters=-benchmark-test,-no_oss,-gpu,-oss_serial" >> .tf_configure.bazelrc
+echo "test:v1 --build_tag_filters=-benchmark-test,-no_oss,-gpu" >> .tf_configure.bazelrc
+echo "test:v2 --test_tag_filters=-benchmark-test,-no_oss,-gpu,-oss_serial,-v1only" >> .tf_configure.bazelrc
+echo "test:v2 --build_tag_filters=-benchmark-test,-no_oss,-gpu,-v1only" >> .tf_configure.bazelrc
+echo "build --action_env TF_CONFIGURE_IOS=\"0\"" >> .tf_configure.bazelrc
+
 
 # Build the pip package
-bazel build --config=opt --config=v2 \
-  --crosstool_top=//third_party/toolchains/preconfig/ubuntu16.04/gcc7_manylinux2010-nvcc-cuda10.0:toolchain \
-  tensorflow/tools/pip_package:build_pip_package
+bazel build --config=release_cpu_linux tensorflow/tools/pip_package:build_pip_package
 
 ./bazel-bin/tensorflow/tools/pip_package/build_pip_package pip_pkg --cpu --nightly_flag
 
@@ -47,6 +56,17 @@ for WHL_PATH in $(ls pip_pkg/tf_nightly_cpu-*dev*.whl); do
   AUDITED_WHL_NAME="${WHL_DIR}"/$(echo "${WHL_BASE_NAME//linux/manylinux2010}")
   auditwheel repair --plat manylinux2010_x86_64 -w "${WHL_DIR}" "${WHL_PATH}"
 
-  echo "Uploading package: ${AUDITED_WHL_NAME}"
-  twine upload -r pypi-warehouse "${AUDITED_WHL_NAME}" || echo
+  # test the whl pip package
+  chmod +x tensorflow/tools/ci_build/builds/nightly_release_smoke_test.sh
+  ./tensorflow/tools/ci_build/builds/nightly_release_smoke_test.sh ${AUDITED_WHL_NAME}
+  RETVAL=$?
+
+  # Upload the PIP package if whl test passes.
+  if [ ${RETVAL} -eq 0 ]; then
+    echo "Basic PIP test PASSED, Uploading package: ${AUDITED_WHL_NAME}"
+    twine upload -r pypi-warehouse "${AUDITED_WHL_NAME}"
+  else
+    echo "Basic PIP test FAILED, will not upload ${AUDITED_WHL_NAME} package"
+    return 1
+  fi
 done

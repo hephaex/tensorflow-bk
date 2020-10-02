@@ -25,8 +25,8 @@ import os
 import platform
 import sys
 
-from tensorflow.python import pywrap_tensorflow as py_tf
-from tensorflow.python.lib.io import file_io
+from tensorflow.python import _pywrap_python_op_gen
+from tensorflow.python.client import pywrap_tf_session as py_tf
 from tensorflow.python.util import deprecation
 from tensorflow.python.util.tf_export import tf_export
 
@@ -56,7 +56,8 @@ def load_op_library(library_filename):
   """
   lib_handle = py_tf.TF_LoadLibrary(library_filename)
   try:
-    wrappers = py_tf.GetPythonWrappers(py_tf.TF_GetOpList(lib_handle))
+    wrappers = _pywrap_python_op_gen.GetPythonWrappers(
+        py_tf.TF_GetOpList(lib_handle))
   finally:
     # Delete the library handle to release any memory held in C
     # that are no longer needed.
@@ -138,9 +139,9 @@ def load_library(library_location):
     OSError: When the file to be loaded is not found.
     RuntimeError: when unable to load the library.
   """
-  if file_io.file_exists(library_location):
-    if file_io.is_directory(library_location):
-      directory_contents = file_io.list_directory(library_location)
+  if os.path.exists(library_location):
+    if os.path.isdir(library_location):
+      directory_contents = os.listdir(library_location)
 
       kernel_libraries = [
           os.path.join(library_location, f) for f in directory_contents
@@ -156,4 +157,3 @@ def load_library(library_location):
         errno.ENOENT,
         'The file or folder to load kernel libraries from does not exist.',
         library_location)
-

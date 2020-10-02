@@ -34,7 +34,8 @@ import datetime
 import os
 import re
 import zipfile
-import tensorflow as tf
+
+import tensorflow.compat.v1 as tf
 
 # TODO(aselle): Disable GPU for now
 os.environ["CUDA_VISIBLE_DEVICES"] = "-1"
@@ -51,7 +52,6 @@ from tensorflow.lite.testing.op_tests.cast import make_cast_tests
 from tensorflow.lite.testing.op_tests.ceil import make_ceil_tests
 from tensorflow.lite.testing.op_tests.concat import make_concat_tests
 from tensorflow.lite.testing.op_tests.constant import make_constant_tests
-from tensorflow.lite.testing.op_tests.control_dep import make_control_dep_tests
 from tensorflow.lite.testing.op_tests.conv import make_conv_tests
 from tensorflow.lite.testing.op_tests.conv2d_transpose import make_conv2d_transpose_tests
 from tensorflow.lite.testing.op_tests.conv_activation import make_conv_relu_tests, make_conv_relu1_tests, make_conv_relu6_tests
@@ -101,6 +101,7 @@ from tensorflow.lite.testing.op_tests.matrix_set_diag import make_matrix_set_dia
 from tensorflow.lite.testing.op_tests.maximum import make_maximum_tests
 from tensorflow.lite.testing.op_tests.minimum import make_minimum_tests
 from tensorflow.lite.testing.op_tests.mirror_pad import make_mirror_pad_tests
+from tensorflow.lite.testing.op_tests.nearest_upsample import make_nearest_upsample_tests
 from tensorflow.lite.testing.op_tests.neg import make_neg_tests
 from tensorflow.lite.testing.op_tests.not_equal import make_not_equal_tests
 from tensorflow.lite.testing.op_tests.one_hot import make_one_hot_tests
@@ -125,6 +126,7 @@ from tensorflow.lite.testing.op_tests.reverse_sequence import make_reverse_seque
 from tensorflow.lite.testing.op_tests.reverse_v2 import make_reverse_v2_tests
 from tensorflow.lite.testing.op_tests.rfft2d import make_rfft2d_tests
 from tensorflow.lite.testing.op_tests.round import make_round_tests
+from tensorflow.lite.testing.op_tests.scatter_nd import make_scatter_nd_tests
 from tensorflow.lite.testing.op_tests.shape import make_shape_tests
 from tensorflow.lite.testing.op_tests.sigmoid import make_sigmoid_tests
 from tensorflow.lite.testing.op_tests.slice import make_slice_tests
@@ -236,6 +238,7 @@ class Options(object):
     # test sets.
     # TODO(juhoha): Separate the state from the options.
     self.multi_gen_state = None
+    self.use_experimental_converter = False
 
 
 def _prepare_dir(options):
